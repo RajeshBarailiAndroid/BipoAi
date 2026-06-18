@@ -1,0 +1,9 @@
+node_modules/
+uploads/
+certs/
+.env
+.node-local/
+secrets/
+*-credentials.json
+*service-account*.json
+.DS_Store

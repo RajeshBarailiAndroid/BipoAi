@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BipoAi — Start your study session</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css?v=openai-tint" />
+  </head>
+  <body class="study-page-mg" data-page="study">
+    <header class="topbar">
+      <div class="container topbar-inner">
+        <a class="brand" href="index.html">BipoAi</a>
+        <nav class="nav-links" aria-label="Main">
+          <a href="index.html#features">Features</a>
+          <a href="dashboard.html">Dashboard</a>
+          <a href="study.html" class="button button-primary nav-cta-btn is-current">Start free session</a>
+          <a class="nav-signin" href="#signin" data-signin-open>Sign in</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero hero-mg study-page-hero" id="study-session">
+        <div class="container hero-mg-grid">
+          <div class="hero-mg-copy">
+            <span class="hero-pill">New study session</span>
+            <h1>Study smarter. Remember more. Stress less.</h1>
+            <p>Turn lectures, PDFs, images, and audio into a complete AI study system — notes, flashcards, quizzes, podcast, and tutor included.</p>
+            <p class="hero-trust">PDFs · Images · Audio · Text — flashcards, notes, quizzes, podcasts</p>
+          </div>
+
+          <section class="study-session-card product-card hero-mg-preview study-form-card" aria-label="Create study session">
+            <p class="hero-preview-label">Your study session</p>
+
+            <label class="study-field study-field-compact">
+              <span class="study-field-label">Session name</span>
+              <input type="text" id="session-name" class="study-session-name" placeholder="e.g. Biology — Chapter 5" maxlength="80" />
+            </label>
+
+            <p class="study-field-label">Add your material</p>
+            <div class="file-type-picker" role="tablist">
+              <button type="button" class="file-type-btn is-active" data-mode="files">PDF &amp; files</button>
+              <button type="button" class="file-type-btn" data-mode="audio">Record / audio</button>
+              <button type="button" class="file-type-btn" data-mode="text">Paste text</button>
+            </div>
+
+            <div class="study-mode-panel" data-mode-panel="files">
+              <div class="study-drop-card" id="study-drop-zone">
+                <input type="file" id="study-file-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx,.mp3,.m4a,.wav" hidden />
+                <button type="button" class="study-drop-btn" id="study-file-trigger">
+                  <span class="study-drop-icon">+</span>
+                  <span class="study-drop-title">Drop files or click to upload</span>
+                  <span class="study-drop-hint">PDF · Word · PowerPoint · Images</span>
+                </button>
+              </div>
+              <ul id="study-file-list" class="study-file-chips" hidden></ul>
+            </div>
+
+            <div class="study-mode-panel" data-mode-panel="audio" hidden>
+              <div class="study-audio-layout">
+                <div class="study-audio-box">
+                  <h3 class="study-audio-box-title">Record lecture</h3>
+                  <div class="study-recorder-ui">
+                    <span class="study-recorder-dot" id="recorder-dot"></span>
+                    <span class="study-recorder-time" id="recorder-time">00:00</span>
+                    <div class="study-recorder-actions">
+                      <button type="button" class="button button-soft" id="record-start">Record</button>
+                      <button type="button" class="button button-outline" id="record-stop" hidden>Stop</button>
+                      <button type="button" class="button button-outline" id="record-reset" hidden>Re-record</button>
+                    </div>
+                    <audio id="record-preview" class="study-record-preview" controls hidden></audio>
+                  </div>
+                </div>
+                <div class="study-audio-box">
+                  <h3 class="study-audio-box-title">Upload audio</h3>
+                  <input type="file" id="audio-file-input" accept="audio/*,.mp3,.m4a,.wav" hidden />
+                  <button type="button" class="button button-outline study-audio-pick-btn" id="audio-file-trigger">Choose file</button>
+                  <p id="audio-file-name" class="study-audio-picked"></p>
+                </div>
+              </div>
+            </div>
+
+            <div class="study-mode-panel" data-mode-panel="text" hidden>
+              <textarea id="study-paste-text" class="study-text-input" rows="4" placeholder="Paste notes, article text, or transcript…"></textarea>
+            </div>
+
+            <div class="study-generate-options">
+              <p class="study-field-label">What to generate</p>
+              <div class="study-generate-picks">
+                <label class="study-generate-pick"><input type="checkbox" id="study-gen-notes" checked /> Notes</label>
+                <label class="study-generate-pick"><input type="checkbox" id="study-gen-flashcards" checked /> Flashcards</label>
+                <label class="study-generate-pick"><input type="checkbox" id="study-gen-podcast" checked /> Podcast</label>
+              </div>
+            </div>
+
+            <div id="study-loading" class="study-loading-panel" hidden>
+              <p class="study-loading-title">AI is building your session</p>
+              <div class="study-loading-progress" aria-hidden="true">
+                <div class="study-loading-progress-bar" id="study-loading-bar"></div>
+              </div>
+              <p id="study-loading-text" class="study-loading-text">Reading your content…</p>
+            </div>
+
+            <button type="button" class="button button-primary button-lg study-create-btn" id="study-generate-btn">
+              Start my free study session
+            </button>
+            <p id="study-generate-status" class="study-status-msg" hidden></p>
+          </section>
+        </div>
+
+        <div class="container file-type-row" aria-hidden="true">
+          <span class="file-type-chip">PDF</span>
+          <span class="file-type-chip">Record lecture</span>
+          <span class="file-type-chip">Audio</span>
+          <span class="file-type-chip">Slides</span>
+          <span class="file-type-chip">Images</span>
+          <span class="file-type-chip">Text</span>
+        </div>
+      </section>
+
+      <div class="container study-below" id="study-workspace">
+        <section id="study-results" class="study-results-card product-card" hidden>
+          <div class="study-results-header">
+            <div>
+              <p class="study-ready-badge">Session ready</p>
+              <h2 id="study-results-title">Your study session</h2>
+              <p id="study-results-meta" class="study-result-meta"></p>
+            </div>
+          </div>
+
+          <div class="session-progress-card" id="session-progress">
+            <p class="session-progress-label">Session progress</p>
+            <div class="session-checklist">
+              <button type="button" class="session-check-item is-done" data-goto="notes"><span class="check-icon">✓</span> Notes</button>
+              <button type="button" class="session-check-item is-done" data-goto="flashcards"><span class="check-icon">✓</span> Flashcards</button>
+              <button type="button" class="session-check-item is-done" data-goto="quiz"><span class="check-icon">✓</span> Quiz</button>
+              <button type="button" class="session-check-item is-done" data-goto="podcast"><span class="check-icon">✓</span> Podcast</button>
+              <button type="button" class="session-check-item" data-goto="tutor"><span class="check-icon">○</span> AI Tutor</button>
+            </div>
+          </div>
+
+          <div class="study-tabs study-tabs-scroll" role="tablist">
+            <button type="button" class="study-tab is-active" data-tab="notes">Notes</button>
+            <button type="button" class="study-tab" data-tab="flashcards">Flashcards</button>
+            <button type="button" class="study-tab" data-tab="quiz">Quiz</button>
+            <button type="button" class="study-tab" data-tab="podcast">Podcast</button>
+            <button type="button" class="study-tab" data-tab="tutor">AI Tutor</button>
+          </div>
+
+          <div id="study-tab-notes" class="study-tab-panel study-result"></div>
+          <div id="study-tab-flashcards" class="study-tab-panel" hidden></div>
+          <div id="study-tab-quiz" class="study-tab-panel" hidden></div>
+          <div id="study-tab-podcast" class="study-tab-panel" hidden></div>
+          <div id="study-tab-tutor" class="study-tab-panel study-tutor-panel" hidden>
+            <p class="study-tutor-hint">Ask anything about your material — available 24/7.</p>
+            <div id="tutor-messages" class="tutor-messages"></div>
+            <form id="tutor-form" class="tutor-form">
+              <input type="text" id="tutor-input" placeholder="Ask a question…" autocomplete="off" />
+              <button type="submit" class="button button-primary">Send</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="study-solver-section" id="solver">
+          <header class="study-section-head">
+            <h2>Step-by-step solver</h2>
+            <p>Math, physics, or complex problems — full worked solutions.</p>
+          </header>
+          <div class="product-card study-solver-card-wrap">
+            <div class="solver-mode-picker" role="tablist" aria-label="How to add your problem">
+              <button type="button" class="study-mode-card is-active" data-solver-tab="type" role="tab" aria-selected="true">
+                <span class="study-mode-card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                </span>
+                <span class="study-mode-card-title">Type problem</span>
+                <span class="study-mode-card-desc">Paste or write your question</span>
+              </button>
+              <button type="button" class="study-mode-card" data-solver-tab="upload" role="tab" aria-selected="false">
+                <span class="study-mode-card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+                </span>
+                <span class="study-mode-card-title">Upload file</span>
+                <span class="study-mode-card-desc">PDF, photo, or screenshot</span>
+              </button>
+            </div>
+            <div class="solver-panel" data-solver-panel="type">
+              <textarea id="solver-problem-text" class="study-text-input solver-problem-input" rows="5" placeholder="e.g. A car travels 60 m in 5 s. What is its velocity?"></textarea>
+              <button type="button" class="button button-primary study-solver-submit" id="solver-type-submit">Solve step by step</button>
+            </div>
+            <div class="solver-panel" data-solver-panel="upload" hidden>
+              <div class="study-drop-card solver-drop-card" id="solver-drop-zone">
+                <input type="file" id="solver-file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx" hidden />
+                <button type="button" class="study-drop-btn" id="solver-file-trigger">
+                  <span class="study-drop-icon">+</span>
+                  <span class="study-drop-title">Drop a file or click to upload</span>
+                  <span class="study-drop-hint">Problem sets, worksheets, or photos</span>
+                </button>
+              </div>
+              <ul id="solver-file-list" class="study-file-chips" hidden></ul>
+              <button type="button" class="button button-primary study-solver-submit" id="solver-upload-submit">Solve step by step</button>
+            </div>
+            <div id="solver-result" class="study-solver-result" hidden></div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <p class="footer-copy">© 2026 BipoAi. All rights reserved.</p>
+    </footer>
+
+    <script src="script.js?v=4"></script>
+  </body>
+</html>

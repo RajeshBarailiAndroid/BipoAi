@@ -1,0 +1,28 @@
+{
+  "name": "bipai",
+  "version": "0.1.0",
+  "description": "Prototype of BipoAi frontend with mock backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:https": "HTTPS=true node server.js",
+    "ssl:generate": "bash scripts/generate-ssl.sh",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "@google-cloud/text-to-speech": "^6.4.1",
+    "@google/genai": "^2.8.0",
+    "@supabase/supabase-js": "^2.108.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "google-auth-library": "^9.14.1",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^3.1.0",
+    "multer": "^1.4.5-lts.1",
+    "youtube-transcript": "^1.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}

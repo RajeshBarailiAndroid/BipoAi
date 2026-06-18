@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BipoAi — My Study Sessions</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css?v=openai-tint" />
+  </head>
+  <body class="app-layout app-layout-mg" data-page="dashboard">
+    <aside class="app-sidebar mg-sidebar" aria-label="Dashboard navigation">
+      <div class="app-sidebar-top">
+        <a class="app-sidebar-brand" href="index.html">
+          <span class="app-sidebar-logo">B</span>
+          <span class="app-sidebar-brand-text">BipoAi</span>
+        </a>
+      </div>
+
+      <a class="mg-sidebar-cta button button-primary" href="study.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        Start free session
+      </a>
+
+      <nav class="app-sidebar-nav" aria-label="Dashboard sections">
+        <a class="app-sidebar-link is-active" href="#dashboard-overview" data-sidebar-section="dashboard-overview">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Overview
+        </a>
+        <a class="app-sidebar-link" href="#dashboard-sessions" data-sidebar-section="dashboard-sessions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
+          My sessions
+        </a>
+        <a class="app-sidebar-link" href="#dashboard-solver" data-sidebar-section="dashboard-solver">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 7h16"/><path d="M7 4v6"/><path d="M17 4v6"/><path d="M6 20h12"/><path d="M9 16h6"/></svg>
+          Step-by-step solver
+        </a>
+      </nav>
+
+      <p class="app-sidebar-nav-label">Upload</p>
+      <nav class="app-sidebar-nav" aria-label="Upload options">
+        <button type="button" class="app-sidebar-link" data-dash-session-open="doc">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
+          Upload doc
+        </button>
+        <button type="button" class="app-sidebar-link" data-dash-session-open="audio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          Upload audio
+        </button>
+        <button type="button" class="app-sidebar-link" data-dash-session-open="materials">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
+          Upload study materials
+        </button>
+        <button type="button" class="app-sidebar-link" data-dash-session-open="youtube">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-2C18.88 4 12 4 12 4s-6.88 0-8.59.42a2.78 2.78 0 0 0-1.95 2 29 29 0 0 0-.42 3.58 29 29 0 0 0 .42 3.58 2.78 2.78 0 0 0 1.95 2C5.12 20 12 20 12 20s6.88 0 8.59-.42a2.78 2.78 0 0 0 1.95-2 29 29 0 0 0 .42-3.58 29 29 0 0 0-.42-3.58Z"/><path d="m9.75 15.02 5.75-3.27-5.75-3.27v6.54Z"/></svg>
+          YouTube video link
+        </button>
+        <button type="button" class="app-sidebar-link" data-dash-session-open="website">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/></svg>
+          Website link
+        </button>
+      </nav>
+
+      <div class="app-sidebar-divider" aria-hidden="true"></div>
+
+      <nav class="app-sidebar-nav app-sidebar-nav-secondary" aria-label="App links">
+        <a class="app-sidebar-link" href="study.html">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          AI Study +
+        </a>
+        <a class="app-sidebar-link" href="index.html">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
+          Home
+        </a>
+      </nav>
+
+      <div class="app-sidebar-footer">
+        <button type="button" class="app-sidebar-user nav-signin" data-signin-open>
+          <span class="app-sidebar-avatar" aria-hidden="true">?</span>
+          <span class="app-sidebar-user-copy">
+            <strong class="sidebar-user-name">Sign in</strong>
+            <span class="sidebar-user-email">Access your account</span>
+          </span>
+        </button>
+      </div>
+    </aside>
+
+    <div class="app-main">
+      <main class="app-main-inner dashboard-page mg-dashboard">
+        <div class="mg-dash-panel" data-dash-panel="overview">
+        <header class="mg-dash-hero" id="dashboard-overview">
+          <div class="mg-dash-hero-copy">
+            <p class="mg-dash-greeting" id="dashboard-greeting">Welcome back</p>
+            <h1>Track your progress for every study session</h1>
+            <p>Pick up where you left off — notes, flashcards, quizzes, podcast, and AI tutor in one place.</p>
+          </div>
+          <div class="mg-dash-hero-actions">
+            <a class="button button-primary button-lg mg-dash-cta" href="study.html">Start my free study session</a>
+          </div>
+        </header>
+
+        <section class="mg-dash-stats" aria-label="Study stats">
+          <article class="mg-stat-card">
+            <span class="mg-stat-icon mg-stat-icon-sessions" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
+            </span>
+            <div>
+              <strong id="session-count">0</strong>
+              <span>Sessions</span>
+            </div>
+          </article>
+          <article class="mg-stat-card">
+            <span class="mg-stat-icon mg-stat-icon-cards" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="4" width="14" height="18" rx="2"/><path d="M8 4V2h8a2 2 0 0 1 2 2v16"/></svg>
+            </span>
+            <div>
+              <strong id="total-cards">0</strong>
+              <span>Flashcards</span>
+            </div>
+          </article>
+          <article class="mg-stat-card mg-stat-card-accent">
+            <span class="mg-stat-icon mg-stat-icon-due" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            </span>
+            <div>
+              <strong id="due-cards">0</strong>
+              <span>Due today</span>
+            </div>
+          </article>
+        </section>
+
+        <section class="mg-dash-quick" aria-label="Quick actions">
+          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="doc">
+            <span class="mg-quick-icon" aria-hidden="true">📄</span>
+            <strong>Upload doc</strong>
+            <span>PDF, Word, PowerPoint, or text</span>
+          </button>
+          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="audio">
+            <span class="mg-quick-icon" aria-hidden="true">🎧</span>
+            <strong>Upload audio</strong>
+            <span>MP3, M4A, WAV lecture files</span>
+          </button>
+          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="materials">
+            <span class="mg-quick-icon" aria-hidden="true">📚</span>
+            <strong>Upload study materials</strong>
+            <span>PDFs, slides, images, and more</span>
+          </button>
+          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="record">
+            <span class="mg-quick-icon" aria-hidden="true">🎙️</span>
+            <strong>Record lecture</strong>
+            <span>Capture class in real time</span>
+          </button>
+          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="youtube">
+            <span class="mg-quick-icon" aria-hidden="true">▶️</span>
+            <strong>YouTube link</strong>
+            <span>Lecture videos with captions</span>
+          </button>
+          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="website">
+            <span class="mg-quick-icon" aria-hidden="true">🌐</span>
+            <strong>Website link</strong>
+            <span>Articles, docs, and web pages</span>
+          </button>
+        </section>
+        </div>
+
+        <section class="mg-dash-section mg-dash-panel" id="dashboard-sessions" data-dash-panel="sessions" hidden aria-labelledby="sessions-heading">
+          <header class="mg-dash-section-head">
+            <div class="mg-dash-section-title-block">
+              <div class="mg-dash-section-title-row">
+                <h2 id="sessions-heading">My study sessions</h2>
+                <div class="mg-dash-search-wrap mg-dash-search-inline">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                  <input type="search" id="dashboard-search" placeholder="Search sessions…" aria-label="Search study sessions" />
+                </div>
+              </div>
+              <p>One session per lecture, chapter, or exam topic</p>
+            </div>
+            <a class="button button-soft button-sm" href="study.html">+ New session</a>
+          </header>
+          <div id="recent-sessions" class="mg-session-list"></div>
+        </section>
+
+        <section class="mg-dash-panel study-solver-section mg-dash-solver" id="solver" data-dash-panel="solver" hidden>
+          <header class="mg-dash-section-head study-section-head">
+            <div>
+              <h2>Step-by-step solver</h2>
+              <p>Math, physics, or complex problems — full worked solutions.</p>
+            </div>
+          </header>
+          <div class="product-card study-solver-card-wrap">
+            <div class="solver-mode-picker" role="tablist" aria-label="How to add your problem">
+              <button type="button" class="study-mode-card is-active" data-solver-tab="type" role="tab" aria-selected="true">
+                <span class="study-mode-card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                </span>
+                <span class="study-mode-card-title">Type problem</span>
+                <span class="study-mode-card-desc">Paste or write your question</span>
+              </button>
+              <button type="button" class="study-mode-card" data-solver-tab="upload" role="tab" aria-selected="false">
+                <span class="study-mode-card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+                </span>
+                <span class="study-mode-card-title">Upload file</span>
+                <span class="study-mode-card-desc">PDF, photo, or screenshot</span>
+              </button>
+            </div>
+            <div class="solver-panel" data-solver-panel="type">
+              <textarea id="solver-problem-text" class="study-text-input solver-problem-input" rows="5" placeholder="e.g. A car travels 60 m in 5 s. What is its velocity?"></textarea>
+              <button type="button" class="button button-primary study-solver-submit" id="solver-type-submit">Solve step by step</button>
+            </div>
+            <div class="solver-panel" data-solver-panel="upload" hidden>
+              <div class="study-drop-card solver-drop-card" id="solver-drop-zone">
+                <input type="file" id="solver-file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx" hidden />
+                <button type="button" class="study-drop-btn" id="solver-file-trigger">
+                  <span class="study-drop-icon">+</span>
+                  <span class="study-drop-title">Drop a file or click to upload</span>
+                  <span class="study-drop-hint">Problem sets, worksheets, or photos</span>
+                </button>
+              </div>
+              <ul id="solver-file-list" class="study-file-chips" hidden></ul>
+              <button type="button" class="button button-primary study-solver-submit" id="solver-upload-submit">Solve step by step</button>
+            </div>
+            <div id="solver-result" class="study-solver-result" hidden></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="dash-session-modal" class="study-modal dash-session-modal" hidden aria-hidden="true">
+      <div class="study-modal-backdrop" data-dash-session-close></div>
+      <div class="study-modal-dialog dash-session-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="dash-session-modal-title">
+        <button type="button" class="study-modal-close" data-dash-session-close aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+        <div class="study-modal-header">
+          <span class="study-modal-icon" id="dash-session-modal-icon" aria-hidden="true">📤</span>
+          <div>
+            <h3 id="dash-session-modal-title">Upload material</h3>
+            <p id="dash-session-modal-desc">Add PDFs, slides, images, or documents</p>
+          </div>
+        </div>
+        <div class="study-modal-body dash-session-modal-body">
+          <label class="study-field study-field-compact">
+            <span class="study-field-label">Session name</span>
+            <input type="text" id="dash-session-name" class="study-session-name" placeholder="e.g. Biology — Chapter 5" maxlength="80" />
+          </label>
+
+          <div class="study-mode-panel" data-dash-mode-panel="files">
+            <div class="study-drop-card" id="dash-drop-zone">
+              <input type="file" id="dash-file-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx,.mp3,.m4a,.wav" hidden />
+              <button type="button" class="study-drop-btn" id="dash-file-trigger">
+                <span class="study-drop-icon">+</span>
+                <span class="study-drop-title" id="dash-drop-title">Drop files or click to upload</span>
+                <span class="study-drop-hint" id="dash-drop-hint">PDF · Word · PowerPoint · Images</span>
+              </button>
+            </div>
+            <ul id="dash-file-list" class="study-file-chips" hidden></ul>
+          </div>
+
+          <div class="study-mode-panel" data-dash-mode-panel="audio" hidden>
+            <div class="study-audio-layout" id="dash-audio-layout">
+              <div class="study-audio-box" id="dash-audio-record-box">
+                <h3 class="study-audio-box-title">Record lecture</h3>
+                <div class="study-recorder-ui">
+                  <span class="study-recorder-dot" id="dash-recorder-dot"></span>
+                  <span class="study-recorder-time" id="dash-recorder-time">00:00</span>
+                  <div class="study-recorder-actions">
+                    <button type="button" class="button button-soft" id="dash-record-start">Record</button>
+                    <button type="button" class="button button-outline" id="dash-record-stop" hidden>Stop</button>
+                    <button type="button" class="button button-outline" id="dash-record-reset" hidden>Re-record</button>
+                  </div>
+                  <audio id="dash-record-preview" class="study-record-preview" controls hidden></audio>
+                </div>
+              </div>
+              <div class="study-audio-box" id="dash-audio-upload-box">
+                <h3 class="study-audio-box-title">Upload audio</h3>
+                <input type="file" id="dash-audio-file-input" accept="audio/*,.mp3,.m4a,.wav" hidden />
+                <button type="button" class="button button-outline study-audio-pick-btn" id="dash-audio-file-trigger">Choose file</button>
+                <p id="dash-audio-file-name" class="study-audio-picked"></p>
+              </div>
+            </div>
+          </div>
+
+          <div class="study-mode-panel" data-dash-mode-panel="youtube" hidden>
+            <label class="study-field">
+              <span class="study-field-label">YouTube video URL</span>
+              <input type="url" id="dash-youtube-url" class="study-session-name" placeholder="https://www.youtube.com/watch?v=…" inputmode="url" />
+            </label>
+            <p class="study-result-meta">Works best with lecture videos that have captions enabled.</p>
+          </div>
+
+          <div class="study-mode-panel" data-dash-mode-panel="website" hidden>
+            <label class="study-field">
+              <span class="study-field-label">Website URL</span>
+              <input type="url" id="dash-website-url" class="study-session-name" placeholder="https://example.com/article" inputmode="url" />
+            </label>
+            <p class="study-result-meta">We read the page and turn it into notes, flashcards, quiz, and podcast.</p>
+          </div>
+
+          <div id="dash-loading" class="study-loading-panel" hidden>
+            <p class="study-loading-title">AI is building your session</p>
+            <div class="study-loading-progress" aria-hidden="true">
+              <div class="study-loading-progress-bar" id="dash-loading-bar"></div>
+            </div>
+            <p id="dash-loading-text" class="study-loading-text">Reading your content…</p>
+          </div>
+
+          <div class="study-generate-options">
+            <p class="study-field-label">What to generate</p>
+            <div class="study-generate-picks">
+              <label class="study-generate-pick"><input type="checkbox" id="dash-gen-notes" checked /> Notes</label>
+              <label class="study-generate-pick"><input type="checkbox" id="dash-gen-flashcards" checked /> Flashcards</label>
+              <label class="study-generate-pick"><input type="checkbox" id="dash-gen-podcast" checked /> Podcast</label>
+            </div>
+          </div>
+
+          <button type="button" class="button button-primary button-lg study-create-btn" id="dash-generate-btn">
+            Start my free study session
+          </button>
+          <p id="dash-generate-status" class="study-status-msg" hidden></p>
+        </div>
+      </div>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
