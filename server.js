@@ -1363,8 +1363,11 @@ app.get('/api/export/anki', (req, res) => {
   res.send(content);
 });
 
-// Static files after API routes so /api/* never falls through to HTML
-app.use(express.static(path.join(__dirname)));
+// Static files (local dev). On Vercel, files in public/ are served by the CDN.
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
