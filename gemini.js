@@ -291,14 +291,49 @@ async function generateChat(message, context = '') {
     const trimmed = (message || '').trim();
     const ctx = (context || '').trim().slice(0, 50000);
     const contents = ctx
-      ? `You are a helpful AI tutor. Answer clearly using the study material below when relevant.\n\nStudy material:\n${ctx}\n\nStudent question: ${trimmed}`
+      ? `You are a study tutor. Answer using ONLY the session material below.
+
+Rules:
+- Start with the direct answer. No greetings, praise, or filler.
+- Never write phrases like "great question", "based on the study material", "since the PDF/content is not provided", or "I would look for".
+- Never mention filenames, session titles, or that you lack the document — use the notes and text given.
+- Be concise: 1–4 sentences unless the student asks for more detail.
+- If the answer is not in the material, reply in one sentence: "Not in your session notes." Then add the closest related fact from the material.
+
+Session material:
+${ctx}
+
+Question: ${trimmed}`
       : trimmed;
     const response = await getAI().models.generateContent({
       model: getDefaultModel(),
-      contents
+      contents,
+      config: {
+        temperature: 0.3
+      }
     });
-    return response.text;
+    return sanitizeTutorReply(response.text);
   });
+}
+
+function sanitizeTutorReply(text) {
+  let reply = String(text || '').trim();
+  if (!reply) return reply;
+  const stripPatterns = [
+    /^that['']?s a great question[^.!?\n]*[.!?]\s*/i,
+    /^great question[^.!?\n]*[.!?]\s*/i,
+    /^you['']?re asking for[^.!?\n]*[.!?]\s*/i,
+    /^based on the study material[^.!?\n]*[.!?]\s*/i,
+    /^however, since the content of[^.!?]*[.!?]\s*/i,
+    /^however, since[^.!?]*is not provided here[^.!?]*[.!?]\s*/i,
+    /^i would look for[^.!?]*[.!?]\s*/i,
+    /^i['']ll give you a standard[^.!?]*[.!?]\s*/i,
+    /^that aligns with what you would typically find[^.!?]*[.!?]\s*/i
+  ];
+  for (const pattern of stripPatterns) {
+    reply = reply.replace(pattern, '');
+  }
+  return reply.trim();
 }
 
 async function generateSolveText(problem) {
@@ -413,6 +448,28 @@ async function waitForFileActive(fileName) {
   throw new Error('File processing timed out.');
 }
 
+const FLASHCARD_COUNT = '20-28';
+const QUIZ_COUNT = '12-16';
+
+const FLASHCARD_INSTRUCTIONS = `Create ${FLASHCARD_COUNT} detailed study flashcards from the material.
+Cover the full content: key terms, definitions, facts, dates, formulas, processes, cause-and-effect, comparisons, and "why/how" questions.
+Use varied question types (What is…, Why does…, How does…, Compare…, Define…).
+Each answer should be 1-3 sentences with specific details from the material — not vague summaries.
+Return JSON: { "items": [{ "q": "question", "a": "answer" }] }`;
+
+const QUIZ_INSTRUCTIONS = `Create a thorough multiple-choice quiz from this study material.
+Use ${QUIZ_COUNT} questions that cover the entire material in depth — main ideas and supporting details.
+Mix difficulty: direct recall, application, and "which is correct" about specifics from the text.
+Every question must have exactly 4 plausible options; only one correct answer.
+Return JSON:
+{
+  "title": "quiz title",
+  "questions": [
+    { "q": "question", "options": ["A", "B", "C", "D"], "answer": 0 }
+  ]
+}
+"answer" is the zero-based index of the correct option.`;
+
 async function generateFlashcardsFromFile(file) {
   return withFailover(async () => {
     const parts = await buildFileParts([file]);
@@ -426,10 +483,10 @@ async function generateFlashcardsFromText(text) {
     if (!source) return [];
     const data = await generateJSON(
       getDefaultModel(),
-      `Create 8-12 study flashcards from this material:
-${source}
-Return JSON: { "items": [{ "q": "question", "a": "answer" }] }
-Keep questions clear and answers concise.`,
+      `${FLASHCARD_INSTRUCTIONS}
+
+Material:
+${source}`,
       []
     );
     return data.items || [];
@@ -439,9 +496,7 @@ Keep questions clear and answers concise.`,
 async function generateFlashcardsFromParts(parts) {
   const data = await generateJSON(
     getDefaultModel(),
-    `Create 8-12 study flashcards from the uploaded material.
-Return JSON: { "items": [{ "q": "question", "a": "answer" }] }
-Keep questions clear and answers concise.`,
+    FLASHCARD_INSTRUCTIONS,
     parts
   );
   return data.items || [];
@@ -489,26 +544,46 @@ Return JSON:
   });
 }
 
+function normalizeQuizQuestions(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  return list.map((item) => {
+    const q = String(item?.q || item?.question || '').trim();
+    let options = item?.options || item?.choices || item?.answers || [];
+    if (!Array.isArray(options)) options = [];
+    options = options.map((opt) => String(opt ?? '').trim()).filter(Boolean).slice(0, 4);
+    let answer = item?.answer ?? item?.correct ?? item?.correctIndex ?? item?.correctAnswer;
+    if (typeof answer === 'string') {
+      const letter = answer.trim().toUpperCase();
+      const letterIdx = { A: 0, B: 1, C: 2, D: 3 }[letter];
+      if (letterIdx != null) answer = letterIdx;
+      else {
+        const idx = options.findIndex((opt) => opt === answer || opt.startsWith(answer));
+        answer = idx >= 0 ? idx : 0;
+      }
+    }
+    answer = Number(answer);
+    if (!Number.isFinite(answer)) answer = 0;
+    answer = Math.max(0, Math.min(Math.max(options.length - 1, 0), answer));
+    return { q, options, answer };
+  }).filter((item) => item.q && item.options.length >= 2);
+}
+
 async function generateQuiz(text) {
   return withFailover(async () => {
+    const source = (text || '').trim().slice(0, 120000);
+    if (!source) return { title: 'Practice quiz', questions: [] };
     const data = await generateJSON(
       getDefaultModel(),
-      `Create a multiple-choice quiz from this study material:
-${(text || '').slice(0, 120000)}
+      `${QUIZ_INSTRUCTIONS}
 
-Return JSON:
-{
-  "title": "quiz title",
-  "questions": [
-    { "q": "question", "options": ["A", "B", "C", "D"], "answer": 0 }
-  ]
-}
-Use 5-8 questions. "answer" is the zero-based index of the correct option.`,
+Study material:
+${source}`,
       []
     );
+    const questions = normalizeQuizQuestions(data.questions);
     return {
       title: data.title || 'Generated quiz',
-      questions: Array.isArray(data.questions) ? data.questions : []
+      questions
     };
   });
 }
@@ -537,7 +612,7 @@ Return JSON:
   "segments": [{ "time": "0:00", "title": "segment", "summary": "summary" }],
   "script": [{ "speaker": "Alex", "text": "line" }, { "speaker": "Sam", "text": "line" }]
 }
-Include 4-6 segments and 10-14 script lines. Cover the key points from the notes. Alex and Sam should explain concepts clearly to the student.`,
+Include 4-6 segments and 12-16 script lines. Cover the key points from the notes. Alex and Sam should explain concepts clearly to the student — natural pacing, not rushed.`,
       []
     );
     if (!Array.isArray(data.hosts) || data.hosts.length < 2) {
@@ -549,11 +624,18 @@ Include 4-6 segments and 10-14 script lines. Cover the key points from the notes
 
 const PODCAST_HOST_BOY = 'Alex';
 const PODCAST_HOST_GIRL = 'Sam';
-const PODCAST_VOICE_BOY = 'Puck';
-const PODCAST_VOICE_GIRL = 'Kore';
+const PODCAST_VOICE_BOY = process.env.GEMINI_TTS_VOICE_MALE || 'Charon';
+const PODCAST_VOICE_GIRL = process.env.GEMINI_TTS_VOICE_FEMALE || 'Aoede';
 
 function getTtsModel() {
   return process.env.GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts';
+}
+
+function parseAudioSampleRate(mimeType) {
+  const mime = String(mimeType || '');
+  const rateMatch = mime.match(/rate=(\d+)/i);
+  if (rateMatch) return Number(rateMatch[1]) || 24000;
+  return 24000;
 }
 
 function pcmToWavBuffer(pcm, sampleRate = 24000, channels = 1, bitsPerSample = 16) {
@@ -576,9 +658,21 @@ function pcmToWavBuffer(pcm, sampleRate = 24000, channels = 1, bitsPerSample = 1
   return Buffer.concat([header, pcm]);
 }
 
-function ensureWavBuffer(buf, sampleRate = 24000) {
+function ensureWavBuffer(buf, sampleRate = 24000, mimeType = '') {
   if (buf.length >= 4 && buf.toString('ascii', 0, 4) === 'RIFF') return buf;
-  return pcmToWavBuffer(buf, sampleRate);
+  const rate = mimeType ? parseAudioSampleRate(mimeType) : sampleRate;
+  return pcmToWavBuffer(buf, rate);
+}
+
+function concatPcmBuffers(buffers) {
+  return Buffer.concat(buffers.filter(Boolean));
+}
+
+function extractPcmFromBuffer(buf) {
+  if (buf.length >= 44 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WAVE') {
+    return buf.subarray(44);
+  }
+  return buf;
 }
 
 function normalizePodcastScript(podcast) {
@@ -594,8 +688,7 @@ function normalizePodcastScript(podcast) {
 }
 
 function buildMultiSpeakerTtsInput(script, boyName, girlName) {
-  const lines = script.map((line) => `${line.speaker}: ${line.text}`).join('\n');
-  return `TTS the following educational study podcast conversation between ${boyName} (male host) and ${girlName} (female host). Speak clearly at a moderate teaching pace:\n${lines}`;
+  return script.map((line) => `${line.speaker}: ${line.text}`).join('\n');
 }
 
 function extractInteractionAudio(interaction) {
@@ -631,6 +724,15 @@ async function generatePodcastAudio(podcast) {
     const ttsModel = getTtsModel();
     const ttsInput = buildMultiSpeakerTtsInput(script, boyName, girlName);
 
+    const audioPayload = (wav) => ({
+      mimeType: 'audio/wav',
+      audioBase64: wav.toString('base64'),
+      hosts: [boyName, girlName],
+      voices: { [boyName]: PODCAST_VOICE_BOY, [girlName]: PODCAST_VOICE_GIRL },
+      provider: 'gemini',
+      ttsModel: getTtsModel()
+    });
+
     try {
       const interaction = await ai.interactions.create({
         model: ttsModel,
@@ -646,12 +748,7 @@ async function generatePodcastAudio(podcast) {
       const audioB64 = extractInteractionAudio(interaction);
       if (audioB64) {
         const wav = ensureWavBuffer(Buffer.from(audioB64, 'base64'));
-        return {
-          mimeType: 'audio/wav',
-          audioBase64: wav.toString('base64'),
-          hosts: [boyName, girlName],
-          voices: { [boyName]: 'male', [girlName]: 'female' }
-        };
+        return audioPayload(wav);
       }
     } catch (err) {
       console.warn('Podcast TTS (interactions):', err.message);
@@ -682,16 +779,40 @@ async function generatePodcastAudio(podcast) {
       const audio = extractGenerateContentAudio(response);
       if (audio?.data) {
         let buf = Buffer.from(audio.data, 'base64');
-        buf = ensureWavBuffer(buf);
-        return {
-          mimeType: 'audio/wav',
-          audioBase64: buf.toString('base64'),
-          hosts: [boyName, girlName],
-          voices: { [boyName]: 'male', [girlName]: 'female' }
-        };
+        buf = ensureWavBuffer(buf, 24000, audio.mimeType);
+        return audioPayload(buf);
       }
     } catch (err) {
       console.warn('Podcast TTS (generateContent):', err.message);
+    }
+
+    // Per-line single-speaker synthesis — clearer alternation when multi-speaker fails
+    try {
+      const pcmChunks = [];
+      let sampleRate = 24000;
+      for (const line of script.slice(0, 16)) {
+        const voice = line.speaker === girlName ? PODCAST_VOICE_GIRL : PODCAST_VOICE_BOY;
+        const response = await ai.models.generateContent({
+          model: ttsModel,
+          contents: line.text,
+          config: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } }
+            }
+          }
+        });
+        const audio = extractGenerateContentAudio(response);
+        if (!audio?.data) continue;
+        sampleRate = parseAudioSampleRate(audio.mimeType);
+        const raw = Buffer.from(audio.data, 'base64');
+        pcmChunks.push(extractPcmFromBuffer(raw));
+      }
+      if (pcmChunks.length) {
+        return audioPayload(pcmToWavBuffer(concatPcmBuffers(pcmChunks), sampleRate));
+      }
+    } catch (err) {
+      console.warn('Podcast TTS (per-line):', err.message);
     }
 
     return null;

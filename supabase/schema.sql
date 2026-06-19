@@ -25,6 +25,7 @@ create table if not exists study_sessions (
   card_count integer not null default 0,
   quiz_count integer not null default 0,
   tutor_done boolean not null default false,
+  tutor_chat jsonb not null default '[]'::jsonb,
   input_type text not null default 'files',
   input_text text,
   audio_url text,
@@ -65,4 +66,4 @@ create index if not exists idx_profiles_email
 -- If tables already exist, run in SQL Editor:
 -- alter table study_sessions add column if not exists input_type text not null default 'files';
 -- alter table study_sessions add column if not exists input_text text;
--- alter table study_sessions add column if not exists audio_url text;
+-- alter table study_sessions add column if not exists tutor_chat jsonb not null default '[]'::jsonb;

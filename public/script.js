@@ -48,7 +48,7 @@ async function parseApiResponse(res) {
     }
   } else if (raw.trimStart().startsWith('<')) {
     if (res.status === 404) {
-      throw new Error('Study link API is unavailable. Restart the server (npm start) and try again.');
+      throw new Error('This feature is unavailable on the running server. Restart with ./start.sh (or npm start) and try again.');
     }
     throw new Error('Server returned an HTML error page instead of data. Check that npm start is running.');
   } else {
@@ -221,7 +221,7 @@ function slimStudySessionForStorage(payload, { aggressive = false } = {}) {
   if (aggressive && clone.data) {
     delete clone.data.sourceText;
     const podcast = clone.data.podcast;
-    if (podcast?.script?.length > 12) podcast.script = podcast.script.slice(0, 12);
+    if (podcast?.script?.length > 20) podcast.script = podcast.script.slice(0, 20);
     if (podcast?.segments?.length > 8) podcast.segments = podcast.segments.slice(0, 8);
   }
   return clone;
@@ -233,6 +233,9 @@ function slimSessionForDb(session) {
   if (audio?.audioBase64 && audio?.audioUrl) delete audio.audioBase64;
   if (clone.inputText?.length > 50000) clone.inputText = clone.inputText.slice(0, 50000);
   if (clone.sourceText?.length > 50000) clone.sourceText = clone.sourceText.slice(0, 50000);
+  if (Array.isArray(clone.tutorChat) && clone.tutorChat.length > 40) {
+    clone.tutorChat = clone.tutorChat.slice(-40);
+  }
   return clone;
 }
 
@@ -614,15 +617,26 @@ function wirePodcastPlayButton(wrap, podcast) {
 
   btn.onclick = () => {
     if (btn.disabled) return;
+    const statusEl = wrap.querySelector('#podcast-audio-status');
     if (player?.src) {
       if (player.paused || player.ended) {
-        player.play().catch(() => speakPodcastInBrowser(podcast));
+        player.play().catch(() => {
+          if (statusEl) {
+            statusEl.hidden = false;
+            statusEl.textContent = 'Could not play Gemini audio. Tap again or refresh.';
+            statusEl.classList.add('is-error');
+          }
+        });
       } else {
         player.pause();
       }
       return;
     }
-    speakPodcastInBrowser(podcast);
+    const panel = wrap.closest('[id^="study-tab-"]') || wrap.parentElement;
+    if (podcast?.script?.length && panel) {
+      showPodcastLoading(wrap, 'Generating Gemini AI voices…');
+      loadPodcastAudio(panel, podcast, ++podcastAudioFetchId);
+    }
   };
 
   if (player) {
@@ -674,57 +688,17 @@ function showPodcastReady(wrap, audio, podcast) {
   setPodcastPlayerState(wrap, { podcast, audio, message: '' });
 }
 
-function showPodcastLoading(wrap, message = 'Preparing podcast audio…') {
+function showPodcastLoading(wrap, message = 'Generating Gemini AI voices…') {
   setPodcastPlayerState(wrap, { loading: true, message, podcast: wrap._podcastRef || null });
 }
 
-function showPodcastBrowserFallback(wrap, podcast) {
+function showPodcastGeminiError(wrap, message) {
   setPodcastPlayerState(wrap, {
-    podcast,
-    message: 'AI voices unavailable — tap Play to listen in your browser.'
+    podcast: wrap._podcastRef || null,
+    message: message || 'Gemini voices unavailable. Set GEMINI_API_KEY and try again.'
   });
-}
-
-function pickBrowserVoices() {
-  const voices = window.speechSynthesis?.getVoices() || [];
-  const female = voices.find((v) => /female|samantha|karen|victoria|zira|fiona|moira/i.test(v.name))
-    || voices.find((v) => v.lang.startsWith('en') && !/male/i.test(v.name));
-  const male = voices.find((v) => /male|daniel|alex|fred|david|james|thomas|guy/i.test(v.name))
-    || voices.find((v) => v.lang.startsWith('en') && v !== female);
-  return { male: male || voices[0], female: female || voices[1] || voices[0] };
-}
-
-function speakPodcastInBrowser(podcast) {
-  if (!window.speechSynthesis) {
-    alert('Speech playback is not supported in this browser.');
-    return;
-  }
-  window.speechSynthesis.cancel();
-  const boy = podcast?.hosts?.[0] || 'Alex';
-  const girl = podcast?.hosts?.[1] || 'Sam';
-  const { male, female } = pickBrowserVoices();
-  const script = podcast?.script || [];
-  let index = 0;
-
-  function speakNext() {
-    if (index >= script.length) return;
-    const line = script[index++];
-    const utterance = new SpeechSynthesisUtterance(line.text);
-    utterance.voice = line.speaker === girl ? female : male;
-    utterance.rate = 0.95;
-    utterance.onend = speakNext;
-    utterance.onerror = speakNext;
-    window.speechSynthesis.speak(utterance);
-  }
-
-  if (window.speechSynthesis.getVoices().length === 0) {
-    window.speechSynthesis.onvoiceschanged = () => {
-      window.speechSynthesis.onvoiceschanged = null;
-      speakNext();
-    };
-  } else {
-    speakNext();
-  }
+  const status = wrap?.querySelector('#podcast-audio-status');
+  if (status) status.classList.add('is-error');
 }
 
 async function loadPodcastAudio(container, podcast, fetchId) {
@@ -735,7 +709,7 @@ async function loadPodcastAudio(container, podcast, fetchId) {
   showPodcastLoading(wrap);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 120000);
+  const timeoutId = setTimeout(() => controller.abort(), 180000);
 
   try {
     const data = await fetch('/api/podcast/audio', {
@@ -755,11 +729,11 @@ async function loadPodcastAudio(container, podcast, fetchId) {
       return;
     }
 
-    showPodcastBrowserFallback(wrap, podcast);
+    showPodcastGeminiError(wrap, data.error || 'Gemini did not return audio. Check GEMINI_API_KEY.');
   } catch (err) {
     if (fetchId !== podcastAudioFetchId) return;
     console.warn('Podcast audio:', err.message);
-    showPodcastBrowserFallback(wrap, podcast);
+    showPodcastGeminiError(wrap, formatApiError(err.message));
   } finally {
     clearTimeout(timeoutId);
   }
@@ -771,7 +745,11 @@ function renderPodcastResult(container, data) {
   const podcast = data.podcast || data;
   const fetchId = ++podcastAudioFetchId;
   const hosts = podcast.hosts || ['Alex', 'Sam'];
+  const boy = hosts[0] || 'Alex';
+  const girl = hosts[1] || 'Sam';
   const hasAudio = podcast.audio?.audioUrl || podcast.audio?.audioBase64;
+  const segments = podcast.segments || [];
+  const script = podcast.script || [];
 
   container.innerHTML = `
     <h3 class="study-podcast-title">${esc(podcast.title || 'Study podcast')}</h3>
@@ -780,11 +758,29 @@ function renderPodcastResult(container, data) {
     <div class="study-podcast-audio-minimal" id="podcast-audio-wrap">
       <button type="button" class="button button-primary study-podcast-play-btn" id="podcast-play-btn" aria-label="Play podcast">
         <svg class="study-podcast-play-icon" id="podcast-play-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-        <span id="podcast-play-label">${hasAudio ? 'Play podcast' : 'Preparing audio…'}</span>
+        <span id="podcast-play-label">${hasAudio ? 'Play podcast' : 'Preparing podcast audio…'}</span>
       </button>
-      <p class="study-podcast-audio-status${hasAudio ? '' : ' is-loading'}" id="podcast-audio-status"${hasAudio ? ' hidden' : ''}>Preparing podcast audio…</p>
+      <p class="study-podcast-audio-status${hasAudio ? '' : ' is-loading'}" id="podcast-audio-status"${hasAudio ? ' hidden' : ''}>Generating Gemini AI voices…</p>
       <audio class="study-podcast-player-minimal" controls playsinline preload="auto" hidden></audio>
-    </div>`;
+    </div>
+    ${segments.length ? `
+      <div class="study-podcast-segments">
+        <h5>Chapters</h5>
+        ${segments.map((s) => `
+          <div class="study-podcast-segment">
+            <span class="study-podcast-time">${esc(s.time || '')}</span>
+            <strong>${esc(s.title || '')}</strong>
+            ${s.summary ? `<p>${esc(s.summary)}</p>` : ''}
+          </div>`).join('')}
+      </div>` : ''}
+    ${script.length ? `
+      <div class="study-podcast-script">
+        <h5>Script</h5>
+        ${script.map((line) => {
+          const isGirl = line.speaker === girl || line.speaker === 'Sam';
+          return `<div class="study-podcast-line study-podcast-line-${isGirl ? 'female' : 'male'}"><strong>${esc(line.speaker || boy)}:</strong><p>${esc(line.text)}</p></div>`;
+        }).join('')}
+      </div>` : ''}`;
 
   const wrap = container.querySelector('#podcast-audio-wrap');
   wrap._podcastRef = podcast;
@@ -796,24 +792,28 @@ function renderPodcastResult(container, data) {
     showPodcastLoading(wrap);
     loadPodcastAudio(container, podcast, fetchId);
   } else {
-    showPodcastBrowserFallback(wrap, podcast);
+    showPodcastGeminiError(wrap, 'No podcast script to generate Gemini voices from.');
   }
 }
 
 function readGenerateOptions(prefix) {
-  const notes = document.getElementById(`${prefix}gen-notes`);
-  const flashcards = document.getElementById(`${prefix}gen-flashcards`);
-  const podcast = document.getElementById(`${prefix}gen-podcast`);
+  const pick = (suffix) =>
+    document.getElementById(`${prefix}${suffix}`) || document.getElementById(`dash-${suffix}`);
+  const notes = pick('gen-notes');
+  const flashcards = pick('gen-flashcards');
+  const quiz = pick('gen-quiz');
+  const podcast = pick('gen-podcast');
   return {
     notes: notes ? notes.checked : true,
     flashcards: flashcards ? flashcards.checked : true,
+    quiz: quiz ? quiz.checked : true,
     podcast: podcast ? podcast.checked : true
   };
 }
 
 function validateGenerateOptions(generate) {
-  if (!generate.notes && !generate.flashcards && !generate.podcast) {
-    throw new Error('Select at least one: Notes, Flashcards, or Podcast.');
+  if (!generate.notes && !generate.flashcards && !generate.quiz && !generate.podcast) {
+    throw new Error('Select at least one: Notes, Flashcards, Quiz, or Podcast.');
   }
   return generate;
 }
@@ -875,12 +875,13 @@ function loadingMessagesForGenerate(generate, activeMode = 'files') {
   else msgs.push('Reading your content…');
   if (generate.notes) msgs.push('Writing smart notes…');
   if (generate.flashcards) msgs.push('Building flashcards…');
+  if (generate.quiz) msgs.push('Building quiz…');
   if (generate.podcast) msgs.push('Creating podcast voices…');
   return msgs.length ? msgs : ['Working on your session…'];
 }
 
 async function createStudySession({ files = [], text = '', url = '', urlType = '', sessionName = '', generate = null }) {
-  const gen = generate || { notes: true, flashcards: true, podcast: true };
+  const gen = generate || { notes: true, flashcards: true, quiz: true, podcast: true };
 
   if (url) {
     const controller = new AbortController();
@@ -937,6 +938,16 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
   }
 }
 
+function buildStudySourceText(data = {}, params = {}) {
+  const direct = String(data.sourceText || data.inputText || '').trim();
+  if (direct) return direct.slice(0, 50000);
+  const bullets = data.notes?.bullets;
+  if (Array.isArray(bullets) && bullets.length) {
+    return bullets.join('\n').slice(0, 50000);
+  }
+  return String(params.text || '').trim().slice(0, 50000);
+}
+
 async function fetchStudyStage(path, body, timeoutMs = 90000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -960,8 +971,8 @@ async function fetchStudyStage(path, body, timeoutMs = 90000) {
 
 /** Generate in stages so notes appear quickly; flashcards and podcast load after. */
 async function createStudySessionStaged(params, { onProgress, onPartial } = {}) {
-  const gen = params.generate || { notes: true, flashcards: true, podcast: true };
-  const outputCount = [gen.notes, gen.flashcards, gen.podcast].filter(Boolean).length;
+  const gen = params.generate || { notes: true, flashcards: true, quiz: true, podcast: true };
+  const outputCount = [gen.notes, gen.flashcards, gen.quiz, gen.podcast].filter(Boolean).length;
   if (outputCount <= 1) {
     return createStudySession(params);
   }
@@ -969,12 +980,13 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
   const stage1Gen = {
     notes: gen.notes,
     flashcards: gen.flashcards && !gen.notes,
+    quiz: gen.quiz && !gen.notes && !gen.flashcards,
     podcast: false
   };
 
   onProgress?.(params.url ? 'Fetching your link…' : gen.notes ? 'Writing smart notes…' : 'Building flashcards…', 15);
   const data = await createStudySession({ ...params, generate: stage1Gen });
-  onProgress?.('Notes ready', gen.flashcards || gen.podcast ? 42 : 100);
+  onProgress?.('Notes ready', gen.flashcards || gen.quiz || gen.podcast ? 42 : 100);
 
   const emitPartial = (extra = {}) => {
     if (!onPartial) return;
@@ -982,35 +994,66 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
     onPartial({
       ...merged,
       _pendingFlashcards: gen.flashcards && !stage1Gen.flashcards && !(merged.flashcards || []).length,
+      _pendingQuiz: gen.quiz && !stage1Gen.quiz && !(merged.quiz?.questions?.length),
       _pendingPodcast: gen.podcast && !(merged.podcast?.script?.length || merged.podcast?.title)
     });
   };
 
   emitPartial({
     flashcards: stage1Gen.flashcards ? (data.flashcards || []) : [],
+    quiz: data.quiz || { title: 'Practice quiz', questions: [] },
     podcast: {}
   });
 
+  const studySourceText = () => buildStudySourceText(data, params);
+
   if (gen.flashcards && !stage1Gen.flashcards) {
-    onProgress?.('Building flashcards…', 58);
+    onProgress?.('Building detailed flashcards…', 55);
     try {
       const cardsData = await fetchStudyStage('/api/study/flashcards', {
-        sourceText: data.sourceText,
-        text: params.text || ''
+        sourceText: studySourceText(),
+        text: params.text || '',
+        notes: data.notes || {}
       });
       data.flashcards = cardsData.flashcards || [];
       if (cardsData.usedMockFallback) data.usedMockFallback = true;
       emitPartial({ flashcards: data.flashcards, _pendingFlashcards: false });
-      onProgress?.('Flashcards ready', gen.podcast ? 78 : 100);
+      onProgress?.('Flashcards ready', gen.quiz || gen.podcast ? 68 : 100);
     } catch (err) {
       data._flashcardsError = err.message;
       emitPartial({ _pendingFlashcards: false });
-      onProgress?.('Flashcards skipped', gen.podcast ? 78 : 100);
+      onProgress?.('Flashcards skipped', gen.quiz || gen.podcast ? 68 : 100);
+    }
+  }
+
+  if (gen.quiz && !stage1Gen.quiz) {
+    onProgress?.('Building detailed quiz…', 72);
+    try {
+      const quizSource = studySourceText();
+      if (!quizSource) {
+        throw new Error('No study material available for quiz generation.');
+      }
+      const quizData = await fetchStudyStage('/api/study/quiz', {
+        sourceText: quizSource,
+        text: params.text || '',
+        notes: data.notes || {}
+      }, 120000);
+      data.quiz = quizData.quiz || { title: 'Practice quiz', questions: [] };
+      if (quizData.usedMockFallback) data.usedMockFallback = true;
+      if (!(data.quiz.questions || []).length) {
+        throw new Error('Quiz returned no questions. Try again or use shorter material.');
+      }
+      emitPartial({ quiz: data.quiz, _pendingQuiz: false });
+      onProgress?.('Quiz ready', gen.podcast ? 82 : 100);
+    } catch (err) {
+      data._quizError = err.message;
+      emitPartial({ quiz: data.quiz || { title: 'Practice quiz', questions: [] }, _pendingQuiz: false });
+      onProgress?.('Quiz skipped', gen.podcast ? 82 : 100);
     }
   }
 
   if (gen.podcast) {
-    onProgress?.('Creating podcast script…', 88);
+    onProgress?.('Creating podcast script…', 85);
     try {
       const podData = await fetchStudyStage('/api/podcast', {
         text: data.sourceText || params.text || '',
@@ -1018,7 +1061,19 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
         style: 'conversational'
       });
       data.podcast = podData.podcast || {};
-      emitPartial({ podcast: data.podcast, _pendingPodcast: false });
+      emitPartial({ podcast: data.podcast, _pendingPodcast: true });
+      onProgress?.('Creating Gemini AI voices…', 92);
+      try {
+        const audioData = await fetchStudyStage('/api/podcast/audio', {
+          podcast: data.podcast
+        }, 180000);
+        if (audioData.podcast) data.podcast = audioData.podcast;
+        else if (audioData.audio) data.podcast.audio = audioData.audio;
+        emitPartial({ podcast: data.podcast, _pendingPodcast: false });
+      } catch (audioErr) {
+        data._podcastAudioError = audioErr.message;
+        emitPartial({ podcast: data.podcast, _pendingPodcast: false });
+      }
       onProgress?.('All set!', 100);
     } catch (err) {
       data._podcastError = err.message;
@@ -1030,6 +1085,7 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
   }
 
   delete data._pendingFlashcards;
+  delete data._pendingQuiz;
   delete data._pendingPodcast;
   return data;
 }
@@ -1944,6 +2000,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const audioUploadBox = document.getElementById('dash-audio-upload-box');
   const youtubeUrlInput = document.getElementById('dash-youtube-url');
   const websiteUrlInput = document.getElementById('dash-website-url');
+  const inputTabs = document.getElementById('dash-input-tabs');
+  const materialsSection = document.getElementById('dash-materials-section');
+  const pasteTextInput = document.getElementById('dash-paste-text');
 
   let activeMode = 'files';
   let activeVariant = 'materials';
@@ -1960,46 +2019,38 @@ document.addEventListener('DOMContentLoaded', () => {
     materials: {
       uploadKind: 'files',
       panel: 'files',
-      audioView: 'upload',
+      inputView: 'materials',
       title: 'Upload study materials',
-      desc: 'Add PDFs, slides, or images — or upload audio below',
+      desc: 'Add PDFs, Word docs, images, slides — or paste text',
       icon: '📚',
-      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx',
-      dropTitle: 'Drop study materials or click to upload',
-      dropHint: 'PDF · Slides · Images · Text'
+      dropTitle: 'Drop files or click to upload',
+      dropHint: 'PDF · Word · Images · Slides · Sheets · Text files'
     },
     files: {
       uploadKind: 'files',
       panel: 'files',
-      audioView: 'upload',
+      inputView: 'materials',
       title: 'Upload study materials',
-      desc: 'Add PDFs, slides, or images — or upload audio below',
+      desc: 'Add PDFs, Word docs, images, slides — or paste text',
       icon: '📚',
-      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx',
-      dropTitle: 'Drop study materials or click to upload',
-      dropHint: 'PDF · Slides · Images · Text'
+      dropTitle: 'Drop files or click to upload',
+      dropHint: 'PDF · Word · Images · Slides · Sheets · Text files'
     },
     audio: {
       uploadKind: 'files',
       panel: 'files',
-      audioView: 'upload',
+      inputView: 'audioUpload',
       title: 'Upload audio',
-      desc: 'Add lecture audio below, or attach study materials above',
-      icon: '🎧',
-      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx',
-      dropTitle: 'Drop study materials or click to upload',
-      dropHint: 'PDF · Slides · Images · Text'
+      desc: 'Add an MP3, M4A, WAV, or other lecture recording',
+      icon: '🎧'
     },
     record: {
       uploadKind: 'files',
       panel: 'files',
-      audioView: 'record',
+      inputView: 'record',
       title: 'Record lecture',
-      desc: 'Record below, or attach study materials above',
-      icon: '🎙️',
-      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx',
-      dropTitle: 'Drop study materials or click to upload',
-      dropHint: 'PDF · Slides · Images · Text'
+      desc: 'Record live audio with your microphone',
+      icon: '🎙️'
     },
     youtube: {
       uploadKind: 'url',
@@ -2030,6 +2081,15 @@ document.addEventListener('DOMContentLoaded', () => {
     statusEl.classList.toggle('is-error', isError);
   }
 
+  function syncInputTabs(variant) {
+    if (!inputTabs) return;
+    inputTabs.querySelectorAll('[data-dash-input]').forEach((tab) => {
+      const active = tab.dataset.dashInput === variant;
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+  }
+
   function setMode(variant) {
     const config = MODE_CONFIG[variant] || MODE_CONFIG.materials;
     activeVariant = variant;
@@ -2042,21 +2102,38 @@ document.addEventListener('DOMContentLoaded', () => {
     if (modalTitle) modalTitle.textContent = config.title;
     if (modalDesc) modalDesc.textContent = config.desc;
     if (modalIcon) modalIcon.textContent = config.icon;
+    syncInputTabs(variant);
 
     if (config.panel === 'files' && fileInput) {
-      fileInput.accept = config.accept;
-      if (dropTitleEl) dropTitleEl.textContent = config.dropTitle;
-      if (dropHintEl) dropHintEl.textContent = config.dropHint;
+      fileInput.accept = SMART_UPLOAD_ACCEPT;
+      if (dropTitleEl) dropTitleEl.textContent = config.dropTitle || MODE_CONFIG.materials.dropTitle;
+      if (dropHintEl) dropHintEl.textContent = config.dropHint || MODE_CONFIG.materials.dropHint;
     }
 
     if (config.panel === 'files') {
-      const uploadOnly = config.audioView === 'upload';
-      const recordOnly = config.audioView === 'record';
-      if (dropZone) dropZone.hidden = false;
-      if (audioStack) audioStack.hidden = false;
-      if (audioRecordBox) audioRecordBox.hidden = uploadOnly;
-      if (audioUploadBox) audioUploadBox.hidden = recordOnly;
-      audioLayout?.classList.toggle('is-single-column', uploadOnly || recordOnly);
+      const view = config.inputView || 'materials';
+      const showMaterials = view === 'materials';
+      const showRecord = view === 'record';
+      const showAudioUpload = view === 'audioUpload';
+
+      if (materialsSection) materialsSection.hidden = !showMaterials;
+      if (audioStack) audioStack.hidden = !showRecord && !showAudioUpload;
+      if (audioRecordBox) audioRecordBox.hidden = !showRecord;
+      if (audioUploadBox) audioUploadBox.hidden = !showAudioUpload;
+      audioLayout?.classList.toggle('is-single-column', showRecord || showAudioUpload);
+      audioRecordBox?.classList.remove('is-emphasis');
+      audioUploadBox?.classList.remove('is-emphasis');
+
+      if (showRecord) {
+        uploadedAudioFile = null;
+        if (audioFileInput) audioFileInput.value = '';
+        if (audioFileName) audioFileName.textContent = '';
+      }
+      if (showAudioUpload) resetRecording();
+      if (showMaterials) resetRecording();
+    } else {
+      if (materialsSection) materialsSection.hidden = true;
+      if (audioStack) audioStack.hidden = true;
     }
   }
 
@@ -2069,6 +2146,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (audioFileName) audioFileName.textContent = '';
     if (youtubeUrlInput) youtubeUrlInput.value = '';
     if (websiteUrlInput) websiteUrlInput.value = '';
+    if (pasteTextInput) pasteTextInput.value = '';
     setStatus('');
   }
 
@@ -2169,13 +2247,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (generateBtn) generateBtn.disabled = false;
   }
 
+  function getUploadedAudioFile() {
+    return uploadedAudioFile || null;
+  }
+
+  function getRecordedAudioFile() {
+    if (!recordedBlob) return null;
+    const ext = recordedBlob.type.includes('webm') ? 'webm' : 'm4a';
+    return new File([recordedBlob], `recording-${Date.now()}.${ext}`, { type: recordedBlob.type });
+  }
+
   function getAudioFile() {
-    if (uploadedAudioFile) return uploadedAudioFile;
-    if (recordedBlob) {
-      const ext = recordedBlob.type.includes('webm') ? 'webm' : 'm4a';
-      return new File([recordedBlob], `recording-${Date.now()}.${ext}`, { type: recordedBlob.type });
-    }
-    return null;
+    return getUploadedAudioFile() || getRecordedAudioFile();
   }
 
   document.body.addEventListener('click', (event) => {
@@ -2183,6 +2266,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!openBtn || openBtn.closest('#dash-session-modal')) return;
     event.preventDefault();
     openModal(openBtn.dataset.dashSessionOpen || 'materials');
+  });
+
+  inputTabs?.querySelectorAll('[data-dash-input]').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      setMode(tab.dataset.dashInput || 'materials');
+      setStatus('');
+    });
   });
 
   modal.querySelectorAll('[data-dash-session-close]').forEach((el) => {
@@ -2266,10 +2356,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const config = MODE_CONFIG[activeVariant] || MODE_CONFIG.materials;
 
     if (activeMode === 'files') {
-      files = selectedFiles.slice();
-      const audio = getAudioFile();
-      if (audio) files.push(audio);
-      if (!files.length) return setStatus('Add study materials or audio.', true);
+      if (activeVariant === 'materials' || activeVariant === 'files') {
+        files = selectedFiles.slice();
+        text = pasteTextInput?.value.trim() || '';
+        if (!files.length && !text) {
+          return setStatus('Add files or paste text.', true);
+        }
+      } else if (activeVariant === 'audio') {
+        const audio = getUploadedAudioFile();
+        if (!audio) return setStatus('Upload an audio file first.', true);
+        files = [audio];
+      } else if (activeVariant === 'record') {
+        const audio = getRecordedAudioFile();
+        if (!audio) return setStatus('Record audio first.', true);
+        files = [audio];
+      } else {
+        files = selectedFiles.slice();
+        const audio = getAudioFile();
+        if (audio) files.push(audio);
+        if (!files.length) return setStatus('Add study materials or audio.', true);
+      }
     } else if (activeMode === 'audio') {
       const audio = getAudioFile();
       if (!audio) return setStatus('Record or upload audio first.', true);
@@ -2287,10 +2393,11 @@ document.addEventListener('DOMContentLoaded', () => {
       return setStatus(err.message, true);
     }
 
-    const hasAudioOnly = activeMode === 'files'
-      && !selectedFiles.length
-      && Boolean(getAudioFile());
-    const contentMode = activeMode === 'url' ? 'url' : hasAudioOnly ? 'audio' : 'files';
+    const hasTextOnly = (activeVariant === 'materials' || activeVariant === 'files')
+      && !files.length
+      && Boolean(text);
+    const hasAudioOnly = activeVariant === 'audio' || activeVariant === 'record';
+    const contentMode = activeMode === 'url' ? 'url' : hasTextOnly ? 'text' : hasAudioOnly ? 'audio' : 'files';
     const loadMsgs = loadingMessagesForGenerate(generate, contentMode);
     showLoading(loadMsgs);
     setStatus('');
@@ -2326,7 +2433,7 @@ document.addEventListener('DOMContentLoaded', () => {
               sessionTitle: resolveSessionTitle(sessionTitleBase, partial, mode, files),
               data: partial,
               activeMode: mode,
-              partial: Boolean(partial._pendingFlashcards || partial._pendingPodcast)
+              partial: Boolean(partial._pendingFlashcards || partial._pendingQuiz || partial._pendingPodcast)
             }
           }));
         }
@@ -3935,7 +4042,8 @@ document.addEventListener('DOMContentLoaded', () => {
     notes: document.getElementById('study-tab-notes'),
     flashcards: document.getElementById('study-tab-flashcards'),
     quiz: document.getElementById('study-tab-quiz'),
-    podcast: document.getElementById('study-tab-podcast')
+    podcast: document.getElementById('study-tab-podcast'),
+    tutor: document.getElementById('study-tab-tutor')
   };
   const newSessionBtn = document.getElementById('study-new-session-btn');
   const deleteSessionBtn = document.getElementById('study-delete-session-btn');
@@ -4025,21 +4133,27 @@ document.addEventListener('DOMContentLoaded', () => {
       hasFlashcards,
       hasQuiz,
       hasPodcast,
+      hasTutor = false,
       pendingNotes = false,
       pendingFlashcards = false,
-      pendingPodcast = false
+      pendingQuiz = false,
+      pendingPodcast = false,
+      tutorActive = false,
+      quizFailed = false
     } = flags;
     const visible = {
       notes: hasNotes || pendingNotes,
       flashcards: hasFlashcards || pendingFlashcards,
-      quiz: hasQuiz,
-      podcast: hasPodcast || pendingPodcast
+      quiz: hasQuiz || pendingQuiz || quizFailed,
+      podcast: hasPodcast || pendingPodcast,
+      tutor: hasTutor
     };
     const ready = {
       notes: hasNotes && !pendingNotes,
       flashcards: hasFlashcards && !pendingFlashcards,
-      quiz: hasQuiz,
-      podcast: hasPodcast && !pendingPodcast
+      quiz: hasQuiz && !pendingQuiz,
+      podcast: hasPodcast && !pendingPodcast,
+      tutor: tutorActive
     };
     tabButtons.forEach((btn) => {
       btn.hidden = !visible[btn.dataset.tab];
@@ -4064,7 +4178,177 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function firstReadingTab(map) {
-    return ['notes', 'flashcards', 'quiz', 'podcast'].find((tab) => map[tab]) || null;
+    return ['notes', 'flashcards', 'quiz', 'podcast', 'tutor'].find((tab) => map[tab]) || null;
+  }
+
+  function buildTutorContext(data = {}) {
+    const {
+      notes = {},
+      sourceText = '',
+      inputText = '',
+      flashcards = [],
+      quiz = {}
+    } = data;
+    const parts = [];
+    if ((notes.bullets || []).length) {
+      parts.push(`Notes:\n${notes.bullets.map((b, i) => `${i + 1}. ${b}`).join('\n')}`);
+    }
+    const material = (sourceText || inputText || '').trim();
+    const notesText = (notes.bullets || []).join('\n');
+    if (material && material !== notesText && !material.match(/^[\w\s.-]+\.(pdf|docx?|pptx?|txt)$/i)) {
+      parts.push(`Material:\n${material}`);
+    }
+    if (flashcards.length) {
+      parts.push(
+        `Flashcards:\n${flashcards.slice(0, 40).map((c) => {
+          const q = c.q || c.question || c.front || '';
+          const a = c.a || c.answer || c.back || '';
+          return `Q: ${q}\nA: ${a}`;
+        }).join('\n\n')}`
+      );
+    }
+    if ((quiz.questions || []).length) {
+      parts.push(
+        `Quiz:\n${quiz.questions.slice(0, 20).map((q, i) => {
+          const correct = q.options?.[q.answer] || '';
+          return `${i + 1}. ${q.q}${correct ? ` → ${correct}` : ''}`;
+        }).join('\n')}`
+      );
+    }
+    return parts.join('\n\n').slice(0, 50000);
+  }
+
+  function formatTutorHtml(text) {
+    return esc(text).replace(/\n/g, '<br>');
+  }
+
+  function tutorWelcomeMessage(context) {
+    if (!context.trim()) {
+      return 'Generate notes first, then ask a question about your session.';
+    }
+    return 'Ask a question — answers come from your session notes and flashcards.';
+  }
+
+  function renderTutorMessages(container, messages) {
+    if (!container) return;
+    container.innerHTML = messages.map((msg) => `
+      <div class="tutor-message tutor-message-${msg.role === 'user' ? 'user' : 'bot'}">
+        <p>${formatTutorHtml(msg.text)}</p>
+      </div>`).join('');
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function persistTutorState() {
+    if (!sessionData || !currentSessionId) return;
+    const displayTitle = sessionData.sessionName || resultsTitle?.textContent || 'Study session';
+    const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = sessionData;
+    const payload = {
+      id: currentSessionId,
+      name: displayTitle,
+      createdAt: sessionData.createdAt || Date.now(),
+      source: notes.source || '',
+      inputType: sessionData.inputType || 'files',
+      inputText: sessionData.inputText || sessionData.sourceText || '',
+      audioUrl: sessionData.audioUrl || null,
+      cardCount: flashcards.length,
+      quizCount: quiz.questions?.length || 0,
+      notes,
+      quiz,
+      flashcards,
+      podcast,
+      sourceText: sessionData.sourceText || sessionData.inputText || '',
+      tutorChat: sessionData.tutorChat || [],
+      tutorDone: Boolean(sessionData.tutorDone)
+    };
+    upsertSessionCache(payload);
+    try {
+      await saveStudySessionToDb(payload);
+    } catch (err) {
+      console.warn('Tutor chat save failed:', err.message);
+    }
+  }
+
+  function renderTutorPanel() {
+    if (!panels.tutor) return;
+    const messages = sessionData?.tutorChat || [];
+    const context = buildTutorContext(sessionData || {});
+    const hasContext = Boolean(context.trim());
+    const welcome = tutorWelcomeMessage(context);
+
+    panels.tutor.innerHTML = `
+      <div class="study-tutor-panel">
+        <p class="study-tutor-hint">${hasContext
+          ? 'Direct answers from your session notes and flashcards.'
+          : 'Generate notes or upload material to enable AI chat.'}</p>
+        <div class="tutor-messages" id="tutor-messages" role="log" aria-live="polite"></div>
+        <form class="tutor-form" id="tutor-form">
+          <input type="text" id="tutor-input" placeholder="Ask about this session…" autocomplete="off"${hasContext ? '' : ' disabled'} />
+          <button type="submit" class="button button-primary" id="tutor-send"${hasContext ? '' : ' disabled'}>Send</button>
+        </form>
+      </div>`;
+
+    const listEl = panels.tutor.querySelector('#tutor-messages');
+    const displayMessages = messages.length
+      ? messages
+      : [{ role: 'bot', text: welcome }];
+    renderTutorMessages(listEl, displayMessages);
+
+    const form = panels.tutor.querySelector('#tutor-form');
+    const input = panels.tutor.querySelector('#tutor-input');
+    const sendBtn = panels.tutor.querySelector('#tutor-send');
+    if (!form || !input || !hasContext) return;
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text || sendBtn?.disabled) return;
+
+      if (!sessionData.tutorChat) sessionData.tutorChat = [];
+      sessionData.tutorChat.push({ role: 'user', text, at: Date.now() });
+      sessionData.tutorDone = true;
+      renderTutorMessages(listEl, sessionData.tutorChat);
+      input.value = '';
+      input.disabled = true;
+      if (sendBtn) sendBtn.disabled = true;
+
+      const typing = document.createElement('div');
+      typing.className = 'tutor-message tutor-message-bot tutor-message-typing';
+      typing.innerHTML = '<p>Thinking…</p>';
+      listEl.appendChild(typing);
+      listEl.scrollTop = listEl.scrollHeight;
+
+      try {
+        const { reply } = await sendTutorMessage(text, context);
+        typing.remove();
+        sessionData.tutorChat.push({ role: 'bot', text: reply || 'No response.', at: Date.now() });
+        renderTutorMessages(listEl, sessionData.tutorChat);
+        markProgress('tutor');
+        syncReadingTabs({
+          hasNotes: (sessionData.notes?.bullets || []).length > 0,
+          hasFlashcards: (sessionData.flashcards || []).length > 0,
+          hasQuiz: (sessionData.quiz?.questions || []).length > 0,
+          hasPodcast: Boolean(sessionData.podcast?.title || sessionData.podcast?.script?.length),
+          hasTutor: true,
+          tutorActive: true,
+          pendingFlashcards: Boolean(sessionData._pendingFlashcards),
+          pendingQuiz: Boolean(sessionData._pendingQuiz),
+          pendingPodcast: Boolean(sessionData._pendingPodcast)
+        });
+        await persistTutorState();
+      } catch (err) {
+        typing.remove();
+        sessionData.tutorChat.push({
+          role: 'bot',
+          text: err.message || 'Could not reach the AI tutor. Try again.',
+          at: Date.now()
+        });
+        renderTutorMessages(listEl, sessionData.tutorChat);
+      } finally {
+        input.disabled = false;
+        if (sendBtn) sendBtn.disabled = false;
+        input.focus();
+      }
+    });
   }
 
   async function loadSavedSessionById(id) {
@@ -4080,7 +4364,9 @@ document.addEventListener('DOMContentLoaded', () => {
       inputType: session.inputType,
       inputText: session.inputText,
       audioUrl: session.audioUrl,
-      sessionId: session.id
+      sessionId: session.id,
+      tutorChat: session.tutorChat || [],
+      tutorDone: Boolean(session.tutorDone)
     }, session.inputType || 'files', { save: false });
     return true;
   }
@@ -4288,6 +4574,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderFlashcardsPanel(items) {
     if (!items?.length) {
       panels.flashcards.innerHTML = '<p class="study-result-meta">No flashcards.</p>';
+      panels.flashcards._refreshDeck = null;
       return;
     }
 
@@ -4295,29 +4582,19 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="study-flashcard-deck" data-fc-deck>
         <div class="study-flashcard-deck-head">
           <p class="study-flashcard-progress">Card <strong data-fc-current>1</strong> of <strong>${items.length}</strong></p>
-          <p class="study-result-meta">Swipe or use arrows · tap card to flip</p>
         </div>
         <div class="study-flashcard-stage">
           <button type="button" class="study-flashcard-nav study-flashcard-prev" data-fc-prev aria-label="Previous card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
           </button>
           <div class="study-flashcard-viewport" data-fc-viewport>
-            <div class="study-flashcard-track" data-fc-track>
-              ${items.map((c) => {
-                const q = esc(c.q || c.question || c.front || '');
-                const a = esc(c.a || c.answer || c.back || '');
-                return `
-                <div class="study-flashcard-slide">
-                  <button type="button" class="study-flashcard" data-flip-card aria-pressed="false">
-                    <span class="study-flashcard-label">Question</span>
-                    <div class="study-flashcard-inner">
-                      <span class="study-flashcard-face study-flashcard-front">${q}</span>
-                      <span class="study-flashcard-face study-flashcard-back">${a}</span>
-                    </div>
-                  </button>
-                </div>`;
-              }).join('')}
-            </div>
+            <button type="button" class="study-flashcard" data-flip-card aria-pressed="false">
+              <span class="study-flashcard-label">Question</span>
+              <div class="study-flashcard-inner">
+                <span class="study-flashcard-face study-flashcard-front" data-fc-front></span>
+                <span class="study-flashcard-face study-flashcard-back" data-fc-back></span>
+              </div>
+            </button>
           </div>
           <button type="button" class="study-flashcard-nav study-flashcard-next" data-fc-next aria-label="Next card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
@@ -4326,11 +4603,15 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="study-flashcard-dots" data-fc-dots>
           ${items.map((_, i) => `<button type="button" class="study-flashcard-dot${i === 0 ? ' is-active' : ''}" data-fc-dot="${i}" aria-label="Go to card ${i + 1}"></button>`).join('')}
         </div>
+        <p class="study-flashcard-hint">Tap the card to flip · swipe or use arrows for more</p>
       </div>`;
 
     const deck = panels.flashcards.querySelector('[data-fc-deck]');
-    const track = deck.querySelector('[data-fc-track]');
     const viewport = deck.querySelector('[data-fc-viewport]');
+    const card = deck.querySelector('[data-flip-card]');
+    const frontEl = deck.querySelector('[data-fc-front]');
+    const backEl = deck.querySelector('[data-fc-back]');
+    const labelEl = card?.querySelector('.study-flashcard-label');
     const currentEl = deck.querySelector('[data-fc-current]');
     const prevBtn = deck.querySelector('[data-fc-prev]');
     const nextBtn = deck.querySelector('[data-fc-next]');
@@ -4339,57 +4620,43 @@ document.addEventListener('DOMContentLoaded', () => {
     let startX = 0;
     let dragging = false;
 
-    function slideWidth() {
-      return viewport.offsetWidth || 1;
+    function cardField(item, side) {
+      if (side === 'q') return item.q || item.question || item.front || '';
+      return item.a || item.answer || item.back || '';
     }
 
-    function updateTrack(animate = true) {
-      track.style.transition = animate ? 'transform 0.32s cubic-bezier(0.4, 0, 0.2, 1)' : 'none';
-      track.style.transform = `translateX(-${index * slideWidth()}px)`;
-    }
-
-    function syncViewportHeight() {
-      const slide = track.children[index];
-      if (slide) viewport.style.height = `${slide.offsetHeight}px`;
-    }
-
-    function flipCard(card, flipped) {
+    function flipCard(flipped) {
       const showAnswer = flipped ?? !card.classList.contains('is-flipped');
       card.classList.toggle('is-flipped', showAnswer);
       card.setAttribute('aria-pressed', showAnswer ? 'true' : 'false');
-      const label = card.querySelector('.study-flashcard-label');
-      if (label) label.textContent = showAnswer ? 'Answer' : 'Question';
-      requestAnimationFrame(syncViewportHeight);
+      if (labelEl) labelEl.textContent = showAnswer ? 'Answer' : 'Question';
+      frontEl.setAttribute('aria-hidden', showAnswer ? 'true' : 'false');
+      backEl.setAttribute('aria-hidden', showAnswer ? 'false' : 'true');
     }
 
-    function goTo(i, animate = true) {
+    function showCard(i) {
       index = Math.max(0, Math.min(items.length - 1, i));
-      updateTrack(animate);
+      const item = items[index];
+      frontEl.textContent = cardField(item, 'q');
+      backEl.textContent = cardField(item, 'a');
+      flipCard(false);
       currentEl.textContent = String(index + 1);
       dots.forEach((d, di) => d.classList.toggle('is-active', di === index));
       prevBtn.disabled = index === 0;
       nextBtn.disabled = index === items.length - 1;
-      deck.querySelectorAll('.study-flashcard.is-flipped').forEach((c) => flipCard(c, false));
-      deck.querySelectorAll('.study-flashcard-slide').forEach((slide, si) => {
-        const label = slide.querySelector('.study-flashcard-label');
-        if (label) label.textContent = si === index ? 'Question' : '';
-      });
-      requestAnimationFrame(syncViewportHeight);
     }
 
-    prevBtn.addEventListener('click', () => goTo(index - 1));
-    nextBtn.addEventListener('click', () => goTo(index + 1));
-    dots.forEach((d) => d.addEventListener('click', () => goTo(Number(d.dataset.fcDot))));
+    prevBtn.addEventListener('click', () => showCard(index - 1));
+    nextBtn.addEventListener('click', () => showCard(index + 1));
+    dots.forEach((d) => d.addEventListener('click', () => showCard(Number(d.dataset.fcDot))));
 
-    deck.querySelectorAll('[data-flip-card]').forEach((card) => {
-      card.addEventListener('pointerdown', (e) => {
-        e.stopPropagation();
-      });
-      card.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        flipCard(card);
-      });
+    card.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+    });
+    card.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      flipCard();
     });
 
     viewport.addEventListener('pointerdown', (e) => {
@@ -4397,37 +4664,24 @@ document.addEventListener('DOMContentLoaded', () => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       dragging = true;
       startX = e.clientX;
-      track.style.transition = 'none';
       viewport.setPointerCapture(e.pointerId);
-    });
-
-    viewport.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - startX;
-      const base = -index * slideWidth();
-      const resistance = (index === 0 && dx > 0) || (index === items.length - 1 && dx < 0) ? 0.35 : 1;
-      track.style.transform = `translateX(${base + dx * resistance}px)`;
     });
 
     viewport.addEventListener('pointerup', (e) => {
       if (!dragging) return;
       dragging = false;
       const dx = e.clientX - startX;
-      if (dx < -50) goTo(index + 1);
-      else if (dx > 50) goTo(index - 1);
-      else updateTrack(true);
+      if (dx < -50) showCard(index + 1);
+      else if (dx > 50) showCard(index - 1);
       try { viewport.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     });
 
     viewport.addEventListener('pointercancel', () => {
-      if (!dragging) return;
       dragging = false;
-      updateTrack(true);
     });
 
-    window.addEventListener('resize', () => updateTrack(false));
-    goTo(0, false);
-    window.addEventListener('resize', syncViewportHeight);
+    showCard(0);
+    panels.flashcards._refreshDeck = () => showCard(index);
   }
 
   function saveFlashcardsDeck(title, items) {
@@ -4458,7 +4712,9 @@ document.addEventListener('DOMContentLoaded', () => {
       quiz,
       flashcards,
       podcast,
-      sourceText: data.sourceText || data.inputText || ''
+      sourceText: data.sourceText || data.inputText || '',
+      tutorChat: data.tutorChat || [],
+      tutorDone: Boolean(data.tutorDone)
     });
   }
 
@@ -4467,6 +4723,56 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!questions.length) { panels.quiz.innerHTML = '<p class="study-result-meta">No quiz.</p>'; return; }
 
     const answers = new Array(questions.length).fill(null);
+    let index = 0;
+    let startX = 0;
+    let dragging = false;
+
+    panels.quiz.innerHTML = `
+      <div class="study-quiz-deck" data-quiz-deck>
+        <div class="study-quiz-deck-head">
+          <p class="study-flashcard-progress">Question <strong data-quiz-current>1</strong> of <strong>${questions.length}</strong></p>
+          <p class="study-result-meta study-quiz-progress" data-quiz-answered>0 of ${questions.length} answered</p>
+        </div>
+        <div class="study-flashcard-stage">
+          <button type="button" class="study-flashcard-nav study-quiz-prev" data-quiz-prev aria-label="Previous question">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+          <div class="study-flashcard-viewport" data-quiz-viewport>
+            <article class="study-quiz-card" data-quiz-card>
+              <p class="study-result-meta" data-quiz-label>Question 1</p>
+              <h3 class="study-quiz-question" data-quiz-question></h3>
+              <div class="study-quiz-options" data-quiz-options></div>
+              <p class="study-quiz-feedback" data-quiz-feedback hidden></p>
+            </article>
+          </div>
+          <button type="button" class="study-flashcard-nav study-quiz-next" data-quiz-next aria-label="Next question">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+          </button>
+        </div>
+        <div class="study-flashcard-dots" data-quiz-dots>
+          ${questions.map((_, i) => `<button type="button" class="study-flashcard-dot${i === 0 ? ' is-active' : ''}" data-quiz-dot="${i}" aria-label="Go to question ${i + 1}"></button>`).join('')}
+        </div>
+        <p class="study-flashcard-hint">Pick an answer · swipe or use arrows for more</p>
+        <div class="study-quiz-footer" data-quiz-footer hidden>
+          <p class="study-quiz-score">Score: <strong data-quiz-score></strong></p>
+          <button type="button" class="button button-soft" id="quiz-retry">Try again</button>
+        </div>
+      </div>`;
+
+    const deck = panels.quiz.querySelector('[data-quiz-deck]');
+    const viewport = deck.querySelector('[data-quiz-viewport]');
+    const card = deck.querySelector('[data-quiz-card]');
+    const labelEl = deck.querySelector('[data-quiz-label]');
+    const questionEl = deck.querySelector('[data-quiz-question]');
+    const optionsEl = deck.querySelector('[data-quiz-options]');
+    const feedbackEl = deck.querySelector('[data-quiz-feedback]');
+    const currentEl = deck.querySelector('[data-quiz-current]');
+    const answeredEl = deck.querySelector('[data-quiz-answered]');
+    const footerEl = deck.querySelector('[data-quiz-footer]');
+    const scoreEl = deck.querySelector('[data-quiz-score]');
+    const prevBtn = deck.querySelector('[data-quiz-prev]');
+    const nextBtn = deck.querySelector('[data-quiz-next]');
+    const dots = deck.querySelectorAll('[data-quiz-dot]');
 
     function answeredCount() {
       return answers.filter((value) => value !== null).length;
@@ -4478,53 +4784,109 @@ document.addEventListener('DOMContentLoaded', () => {
       ), 0);
     }
 
-    function render() {
+    function updateMeta() {
       const done = answeredCount() === questions.length;
-      panels.quiz.innerHTML = `
-        <div class="study-quiz-list">
-          ${questions.map((q, i) => `
-            <article class="study-quiz-card">
-              <p class="study-result-meta">Question ${i + 1}</p>
-              <h3 class="study-quiz-question">${esc(q.q)}</h3>
-              <div class="study-quiz-options">${(q.options || []).map((opt, oi) => {
-                const chosen = answers[i];
-                const classes = ['study-quiz-option'];
-                if (chosen !== null) {
-                  if (oi === q.answer) classes.push('is-correct');
-                  else if (oi === chosen) classes.push('is-wrong');
-                }
-                return `<button type="button" class="${classes.join(' ')}" data-q="${i}" data-opt="${oi}"${chosen !== null ? ' disabled' : ''}>${esc(opt)}</button>`;
-              }).join('')}</div>
-              ${answers[i] !== null ? `<p class="study-quiz-feedback">${answers[i] === q.answer ? 'Correct!' : 'See highlighted answer.'}</p>` : ''}
-            </article>
-          `).join('')}
-        </div>
-        ${done
-          ? `<p class="study-quiz-score">Score: <strong>${score()}/${questions.length}</strong></p>
-             <button type="button" class="button button-soft" id="quiz-retry">Try again</button>`
-          : `<p class="study-result-meta study-quiz-progress">${answeredCount()} of ${questions.length} answered</p>`}`;
+      answeredEl.textContent = `${answeredCount()} of ${questions.length} answered`;
+      footerEl.hidden = !done;
+      if (done) scoreEl.textContent = `${score()}/${questions.length}`;
+    }
 
-      panels.quiz.querySelectorAll('.study-quiz-option:not(:disabled)').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const qi = Number(btn.dataset.q);
-          if (answers[qi] !== null) return;
-          answers[qi] = Number(btn.dataset.opt);
-          render();
+    function bindOptions(i) {
+      const q = questions[i];
+      const chosen = answers[i];
+      optionsEl.querySelectorAll('.study-quiz-option:not(:disabled)').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (answers[i] !== null) return;
+          answers[i] = Number(btn.dataset.opt);
+          showQuestion(i);
         });
-      });
-
-      panels.quiz.querySelector('#quiz-retry')?.addEventListener('click', () => {
-        answers.fill(null);
-        render();
       });
     }
 
-    render();
+    function showQuestion(i) {
+      index = Math.max(0, Math.min(questions.length - 1, i));
+      const q = questions[index];
+      const chosen = answers[index];
+
+      labelEl.textContent = `Question ${index + 1}`;
+      questionEl.textContent = q.q || '';
+      optionsEl.innerHTML = (q.options || []).map((opt, oi) => {
+        const classes = ['study-quiz-option'];
+        if (chosen !== null) {
+          if (oi === q.answer) classes.push('is-correct');
+          else if (oi === chosen) classes.push('is-wrong');
+        }
+        return `<button type="button" class="${classes.join(' ')}" data-opt="${oi}"${chosen !== null ? ' disabled' : ''}>${esc(opt)}</button>`;
+      }).join('');
+
+      if (chosen !== null) {
+        feedbackEl.hidden = false;
+        feedbackEl.textContent = chosen === q.answer ? 'Correct!' : 'See highlighted answer.';
+      } else {
+        feedbackEl.hidden = true;
+        feedbackEl.textContent = '';
+      }
+
+      currentEl.textContent = String(index + 1);
+      prevBtn.disabled = index === 0;
+      nextBtn.disabled = index === questions.length - 1;
+      dots.forEach((d, di) => {
+        d.classList.toggle('is-active', di === index);
+        d.classList.toggle('is-answered', answers[di] !== null);
+      });
+
+      bindOptions(index);
+      updateMeta();
+    }
+
+    prevBtn.addEventListener('click', () => showQuestion(index - 1));
+    nextBtn.addEventListener('click', () => showQuestion(index + 1));
+    dots.forEach((d) => d.addEventListener('click', () => showQuestion(Number(d.dataset.quizDot))));
+
+    card.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.study-quiz-option')) return;
+      e.stopPropagation();
+    });
+
+    viewport.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.study-quiz-option')) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      dragging = true;
+      startX = e.clientX;
+      viewport.setPointerCapture(e.pointerId);
+    });
+
+    viewport.addEventListener('pointerup', (e) => {
+      if (!dragging) return;
+      dragging = false;
+      const dx = e.clientX - startX;
+      if (dx < -50) showQuestion(index + 1);
+      else if (dx > 50) showQuestion(index - 1);
+      try { viewport.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    });
+
+    viewport.addEventListener('pointercancel', () => {
+      dragging = false;
+    });
+
+    deck.querySelector('#quiz-retry')?.addEventListener('click', () => {
+      answers.fill(null);
+      showQuestion(0);
+    });
+
+    showQuestion(0);
   }
 
   function switchTab(id) {
     tabButtons.forEach((b) => b.classList.toggle('is-active', b.dataset.tab === id && !b.hidden));
     Object.entries(panels).forEach(([k, p]) => { if (p) p.hidden = k !== id; });
+    if (id === 'flashcards' && panels.flashcards?._refreshDeck) {
+      requestAnimationFrame(() => panels.flashcards._refreshDeck());
+    }
+    if (id === 'tutor' && panels.tutor && !panels.tutor.querySelector('#tutor-form')) {
+      renderTutorPanel();
+    }
   }
 
   tabButtons.forEach((b) => b.addEventListener('click', () => {
@@ -4579,18 +4941,31 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionData = { ...(sessionData || {}), ...data };
     const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = sessionData;
     const pendingFlashcards = Boolean(sessionData._pendingFlashcards);
+    const pendingQuiz = Boolean(sessionData._pendingQuiz);
     const pendingPodcast = Boolean(sessionData._pendingPodcast);
     const hasNotes = (notes.bullets || []).length > 0;
     const hasFlashcards = flashcards.length > 0;
     const hasPodcast = Boolean(podcast.title || podcast.script?.length || podcast.audio?.audioUrl);
     const hasQuiz = (quiz.questions || []).length > 0;
+    const hasTutorContext = Boolean(
+      buildTutorContext(sessionData).trim()
+      || hasNotes
+      || pendingFlashcards
+      || pendingQuiz
+      || pendingPodcast
+    );
+    const tutorActive = Boolean(sessionData.tutorDone || (sessionData.tutorChat || []).some((m) => m.role === 'user'));
     const readingMap = syncReadingTabs({
       hasNotes,
       hasFlashcards,
       hasQuiz,
       hasPodcast,
+      hasTutor: hasTutorContext,
+      tutorActive,
       pendingFlashcards,
-      pendingPodcast
+      pendingQuiz,
+      pendingPodcast,
+      quizFailed: Boolean(sessionData._quizError)
     });
     updateAiBanner(sessionData);
 
@@ -4599,7 +4974,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const metaParts = [
       mode === 'audio' ? 'From lecture audio' : mode === 'url' ? (notes.source || 'From web link') : notes.source,
       hasFlashcards ? `${flashcards.length} flashcards` : pendingFlashcards ? 'flashcards loading…' : '',
-      hasQuiz ? `${quiz.questions.length} quiz questions` : '',
+      hasQuiz ? `${quiz.questions.length} quiz questions` : pendingQuiz ? 'quiz loading…' : '',
       hasPodcast && podcast.audio?.audioUrl ? 'podcast ready' : hasPodcast ? 'podcast included' : pendingPodcast ? 'podcast loading…' : ''
     ].filter(Boolean);
     resultsMeta.textContent = metaParts.join(' · ');
@@ -4613,13 +4988,31 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (sessionData._flashcardsError && panels.flashcards) {
       panels.flashcards.innerHTML = `<p class="study-result-meta">${esc(sessionData._flashcardsError)}</p>`;
     }
-    if (hasQuiz) renderQuizPanel(quiz);
+    if (pendingQuiz && panels.quiz) {
+      panels.quiz.innerHTML = '<p class="study-loading">Building quiz…</p>';
+    } else if (hasQuiz) {
+      renderQuizPanel(quiz);
+    } else if (sessionData._quizError && panels.quiz) {
+      panels.quiz.innerHTML = `<p class="study-result-meta">${esc(sessionData._quizError)}</p>`;
+    }
     if (pendingPodcast && panels.podcast) {
       panels.podcast.innerHTML = '<p class="study-loading">Creating podcast script…</p>';
     } else if (hasPodcast) {
       renderPodcastResult(panels.podcast, { podcast });
     } else if (sessionData._podcastError && panels.podcast) {
       panels.podcast.innerHTML = `<p class="study-result-meta">${esc(sessionData._podcastError)}</p>`;
+    } else if (sessionData._podcastAudioError && panels.podcast && hasPodcast) {
+      renderPodcastResult(panels.podcast, { podcast });
+      const status = panels.podcast.querySelector('#podcast-audio-status');
+      if (status) {
+        status.hidden = false;
+        status.textContent = esc(sessionData._podcastAudioError);
+        status.classList.add('is-error');
+      }
+    }
+
+    if (hasTutorContext && (!partial || !panels.tutor.querySelector('#tutor-form'))) {
+      renderTutorPanel();
     }
 
     const firstTab = firstReadingTab(readingMap);
@@ -4645,7 +5038,9 @@ document.addEventListener('DOMContentLoaded', () => {
           quiz,
           flashcards,
           podcast,
-          sourceText: sessionData.sourceText || sessionData.inputText || ''
+          sourceText: sessionData.sourceText || sessionData.inputText || '',
+          tutorChat: sessionData.tutorChat || [],
+          tutorDone: Boolean(sessionData.tutorDone)
         });
       } else {
         const saved = await persistStudySession(displayTitle, { ...sessionData, sessionId: sessionData.sessionId }, mode);
@@ -4714,7 +5109,7 @@ document.addEventListener('DOMContentLoaded', () => {
             window.setTimeout(() => hideLoading(), 400);
             firstResult = true;
           } else if (typeof partial === 'object') {
-            const pct = partial._pendingPodcast ? 78 : partial._pendingFlashcards ? 42 : 100;
+            const pct = partial._pendingPodcast ? 88 : partial._pendingQuiz ? 72 : partial._pendingFlashcards ? 55 : 100;
             setLoadingProgress(pct);
           }
           await applyGeneratedSession(

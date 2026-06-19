@@ -76,7 +76,8 @@ function clientAudioPayload(audio) {
   const out = {
     mimeType: audio.mimeType,
     hosts: audio.hosts,
-    voices: audio.voices
+    voices: audio.voices,
+    provider: audio.provider || 'gemini'
   };
   if (audio.audioUrl) out.audioUrl = audio.audioUrl;
   else if (audio.audioBase64) out.audioBase64 = audio.audioBase64;
@@ -336,8 +337,8 @@ app.post('/api/chat', async (req, res) => {
   const snippet = (context || '').trim().slice(0, 120);
   res.json({
     reply: snippet
-      ? `Based on your material (${snippet}${context.length > 120 ? '…' : ''}), focus on the main idea and try explaining it in your own words. (AI tutor offline — connect Gemini for full answers.)`
-      : 'Connect Gemini in .env to use the AI tutor. For now, review your notes and quiz tabs above.'
+      ? `Not in your session notes. Closest topic: ${snippet}${context.length > 120 ? '…' : ''}. (Connect Gemini for full answers.)`
+      : 'Connect Gemini in .env to use AI chat.'
   });
 });
 
@@ -521,46 +522,61 @@ app.post('/api/podcast', async (req, res) => {
   res.json({ type: 'podcast', podcast });
 });
 
-// Generate two-voice podcast audio (Alex male, Sam female) from script
+// Generate Gemini AI voices for podcast script (no browser TTS fallback)
 app.post('/api/podcast/audio', async (req, res) => {
   const { podcast, text, title, style } = req.body || {};
   try {
+    if (!gemini.isGeminiEnabled()) {
+      return res.status(503).json({
+        error: 'Gemini API key required for podcast voices. Set GEMINI_API_KEY in .env or Vercel.'
+      });
+    }
+
     let episode = podcast;
     if (!episode?.script?.length && (text || '').trim()) {
-      episode = await tryGemini(() => gemini.generatePodcast({ text: text.trim(), title, style }));
+      episode = await gemini.generatePodcast({ text: text.trim(), title, style });
     }
     if (!episode?.script?.length) {
       return res.status(400).json({ error: 'No podcast script available for voice generation.' });
     }
 
-    episode.hosts = ['Alex', 'Sam'];
-    const audio = await tryGemini(() => gemini.generatePodcastAudio(episode));
-    if (audio?.audioBase64) {
-      audio.audioUrl = savePodcastAudioFile(audio.audioBase64);
-      episode.audio = clientAudioPayload({
-        mimeType: audio.mimeType,
-        audioUrl: audio.audioUrl,
-        audioBase64: audio.audioBase64,
-        hosts: audio.hosts,
-        voices: audio.voices
+    if (!Array.isArray(episode.hosts) || episode.hosts.length < 2) {
+      episode.hosts = ['Alex', 'Sam'];
+    }
+
+    const audio = await gemini.generatePodcastAudio(episode);
+    if (!audio?.audioBase64) {
+      return res.status(502).json({
+        error: 'Gemini voice generation failed. Verify GEMINI_API_KEY and GEMINI_TTS_MODEL (gemini-2.5-flash-preview-tts).'
       });
     }
 
+    audio.audioUrl = savePodcastAudioFile(audio.audioBase64);
+    episode.audio = clientAudioPayload({
+      mimeType: audio.mimeType,
+      audioUrl: audio.audioUrl,
+      audioBase64: audio.audioBase64,
+      hosts: audio.hosts,
+      voices: audio.voices,
+      provider: 'gemini'
+    });
+
     res.json({
       type: 'podcast-audio',
+      provider: 'gemini',
       podcast: episode,
-      audio: clientAudioPayload(episode.audio),
-      message: episode.audio ? null : 'Voice generation unavailable. Use browser playback.'
+      audio: clientAudioPayload(episode.audio)
     });
   } catch (err) {
-    res.status(500).json({ error: err.message || 'Podcast audio generation failed.' });
+    console.warn('Podcast Gemini TTS:', err.message);
+    res.status(err.status || 500).json({ error: err.message || 'Gemini podcast voice generation failed.' });
   }
 });
 
 app.get('/api/podcast/stream/:file', (req, res) => {
   const safeName = path.basename(req.params.file || '');
   if (!safeName.endsWith('.wav')) return res.status(400).json({ error: 'Invalid audio file.' });
-  const filePath = path.join(PODCAST_AUDIO_DIR, safeName);
+  const filePath = path.join(PODCAST_AUDIO_DIR(), safeName);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Audio not found.' });
   res.setHeader('Content-Type', 'audio/wav');
   res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -1138,14 +1154,25 @@ function mockStudyNotes(text, files) {
   };
 }
 
+function resolveStudySourceText(body = {}) {
+  let sourceText = String(body.sourceText || body.text || '').trim();
+  if (!sourceText && Array.isArray(body.notes?.bullets) && body.notes.bullets.length) {
+    sourceText = body.notes.bullets.join('\n');
+  }
+  return sourceText.trim();
+}
+
 function mockStudyQuiz(sourceText) {
   const snippet = (sourceText || 'your material').substring(0, 80);
   return {
     title: 'Practice quiz',
     questions: [
-      { q: 'Which technique improves long-term retention?', options: ['Rereading', 'Spaced repetition', 'Highlighting'], answer: 1 },
-      { q: 'Active recall means…', options: ['Passive review', 'Actively retrieving information', 'Copying notes'], answer: 1 },
-      { q: `What is a key idea from: "${snippet}${sourceText.length > 80 ? '…' : ''}"?`, options: ['The main concept from your material', 'An unrelated topic', 'None of the above'], answer: 0 }
+      { q: 'Which technique improves long-term retention?', options: ['Rereading only', 'Spaced repetition', 'Highlighting without review', 'Skipping hard sections'], answer: 1 },
+      { q: 'Active recall means…', options: ['Passive rereading', 'Actively retrieving information from memory', 'Copying notes verbatim', 'Watching videos once'], answer: 1 },
+      { q: 'Why are detailed flashcards useful?', options: ['They replace reading', 'They force retrieval of specific facts and definitions', 'They shorten study time to zero', 'They avoid practice'], answer: 1 },
+      { q: 'A good quiz question should…', options: ['Test one vague idea', 'Test specific details from the material', 'Have no wrong options', 'Never include definitions'], answer: 1 },
+      { q: `What is a key idea from: "${snippet}${sourceText.length > 80 ? '…' : ''}"?`, options: ['The main concept from your material', 'An unrelated topic', 'Nothing from the upload', 'Only the file name'], answer: 0 },
+      { q: 'Interleaved practice means…', options: ['Studying one topic only', 'Mixing different topics or problem types in one session', 'Avoiding review', 'Deleting old notes'], answer: 1 }
     ]
   };
 }
@@ -1153,9 +1180,12 @@ function mockStudyQuiz(sourceText) {
 function mockStudyFlashcards(sourceText) {
   const snippet = (sourceText || 'your study material').substring(0, 60);
   return [
-    { q: 'What is spaced repetition?', a: 'Reviewing material at increasing intervals to strengthen memory.' },
-    { q: 'What is active recall?', a: 'Testing yourself by retrieving information from memory.' },
-    { q: 'Key idea from your upload', a: `Review the main concepts from: ${snippet}${sourceText.length > 60 ? '…' : ''}` }
+    { q: 'What is spaced repetition?', a: 'Reviewing material at increasing intervals to strengthen long-term memory.' },
+    { q: 'What is active recall?', a: 'Testing yourself by retrieving information from memory rather than rereading.' },
+    { q: 'Why review definitions from your material?', a: 'Precise definitions anchor facts and prevent vague, incorrect summaries.' },
+    { q: 'What should flashcard answers include?', a: 'Specific details from the source — names, steps, causes, or examples — not generic phrases.' },
+    { q: 'Key idea from your upload', a: `Review the main concepts and supporting details from: ${snippet}${sourceText.length > 60 ? '…' : ''}` },
+    { q: 'How does interleaving help learning?', a: 'Mixing topics during study improves discrimination and long-term retention.' }
   ];
 }
 
@@ -1207,7 +1237,7 @@ function enrichStudyNotesFromUrl(notes, meta) {
 }
 
 function normalizeGenerateOptions(input) {
-  const defaults = { notes: true, flashcards: true, podcast: true };
+  const defaults = { notes: true, flashcards: true, quiz: true, podcast: true };
   if (!input) return defaults;
   let raw = input;
   if (typeof raw === 'string') {
@@ -1220,13 +1250,14 @@ function normalizeGenerateOptions(input) {
   return {
     notes: raw.notes !== false && raw.notes !== 'false',
     flashcards: raw.flashcards !== false && raw.flashcards !== 'false',
+    quiz: raw.quiz !== false && raw.quiz !== 'false',
     podcast: raw.podcast !== false && raw.podcast !== 'false'
   };
 }
 
 async function buildStudySession({ text, files, urlMeta = null, generate: rawGenerate = null }) {
   const generate = normalizeGenerateOptions(rawGenerate);
-  if (!generate.notes && !generate.flashcards && !generate.podcast) {
+  if (!generate.notes && !generate.flashcards && !generate.quiz && !generate.podcast) {
     throw new Error('Select at least one output to generate.');
   }
 
@@ -1236,12 +1267,14 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
   let sourceText = text;
   let usedAi = false;
   let flashcards = [];
+  let quiz = { title: 'Practice quiz', questions: [] };
   const inputType = urlMeta ? 'url' : audioOnly ? 'audio' : (text && !files.length) ? 'text' : 'files';
   const audioUrl = audioOnly && files[0]?.filename ? `/uploads/${files[0].filename}` : null;
 
   const shouldReadMaterial = generate.notes
     || (generate.podcast && (audioOnly || files.length > 0 || !text))
-    || (generate.flashcards && files.length > 0 && !canFlashcardsFromFile);
+    || (generate.flashcards && files.length > 0 && !canFlashcardsFromFile)
+    || (generate.quiz && files.length > 0 && !text);
 
   if (shouldReadMaterial) {
     let notesResult;
@@ -1297,6 +1330,13 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     if (!flashcards.length) flashcards = mockStudyFlashcards(sourceText);
   }
 
+  if (generate.quiz && sourceText.trim()) {
+    const quizResult = await tryGeminiStudy(() => gemini.generateQuiz(sourceText), 'quiz');
+    quiz = quizResult.value || { title: 'Practice quiz', questions: [] };
+    usedAi = usedAi || quizResult.usedAi;
+    if (!quiz.questions?.length) quiz = mockStudyQuiz(sourceText);
+  }
+
   let podcast = null;
   if (generate.podcast) {
     const podcastResult = await tryGeminiStudy(() => gemini.generatePodcast({
@@ -1327,8 +1367,8 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
       };
     }
 
-    // Podcast TTS is slow on serverless; load audio later via /api/podcast/audio.
-    if (podcast?.script?.length && !process.env.VERCEL) {
+    // Always use Gemini TTS when building study sessions locally
+    if (podcast?.script?.length) {
       try {
         const audioResult = await tryGeminiStudy(() => gemini.generatePodcastAudio(podcast), 'podcast-audio');
         const audio = audioResult.value;
@@ -1340,7 +1380,8 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
             audioUrl: streamUrl,
             audioBase64: audio.audioBase64,
             hosts: audio.hosts,
-            voices: audio.voices
+            voices: audio.voices,
+            provider: audio.provider || 'gemini'
           });
         }
       } catch (err) {
@@ -1349,27 +1390,55 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     }
   }
 
+  if (!sourceText.trim()) {
+    if (text.trim()) sourceText = text.trim();
+    else if (hasStudyNotes(notes)) sourceText = notes.bullets.join('\n');
+  }
+
   const aiConfigured = gemini.isGeminiEnabled();
 
   return {
     type: 'study',
     notes,
-    quiz: { title: 'Practice quiz', questions: [] },
+    quiz,
     flashcards,
     podcast: podcast || {},
-    sourceText: sourceText.slice(0, 8000),
+    sourceText: sourceText.slice(0, 50000),
     inputType,
     inputText: (text || sourceText || '').slice(0, 50000),
     audioUrl,
     generate,
     aiConfigured,
     aiUsed: usedAi,
-    usedMockFallback: !usedAi && (generate.notes || generate.flashcards || generate.podcast)
+    usedMockFallback: !usedAi && (generate.notes || generate.flashcards || generate.quiz || generate.podcast)
   };
 }
 
+app.post('/api/study/quiz', async (req, res) => {
+  const sourceText = resolveStudySourceText(req.body || {});
+  if (!sourceText) {
+    return res.status(400).json({ error: 'No study material provided.' });
+  }
+
+  try {
+    const quizResult = await tryGeminiStudy(
+      () => gemini.generateQuiz(sourceText),
+      'quiz'
+    );
+    let quiz = quizResult.value || { title: 'Practice quiz', questions: [] };
+    if (!quiz.questions?.length) quiz = mockStudyQuiz(sourceText);
+    res.json({
+      quiz,
+      aiUsed: quizResult.usedAi,
+      usedMockFallback: !quizResult.usedAi
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Quiz generation failed.' });
+  }
+});
+
 app.post('/api/study/flashcards', async (req, res) => {
-  const sourceText = (req.body?.sourceText || req.body?.text || '').trim();
+  const sourceText = resolveStudySourceText(req.body || {});
   if (!sourceText) {
     return res.status(400).json({ error: 'No study material provided.' });
   }

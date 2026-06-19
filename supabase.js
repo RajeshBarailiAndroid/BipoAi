@@ -134,6 +134,7 @@ function mapSessionRow(row) {
     cardCount: row.card_count || 0,
     quizCount: row.quiz_count || 0,
     tutorDone: Boolean(row.tutor_done),
+    tutorChat: Array.isArray(row.tutor_chat) ? row.tutor_chat : [],
     createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now()
   };
@@ -213,6 +214,7 @@ async function upsertStudySession(ownerId, session) {
     card_count: session.cardCount || (session.flashcards?.length ?? 0),
     quiz_count: session.quizCount || (session.quiz?.questions?.length ?? 0),
     tutor_done: Boolean(session.tutorDone),
+    tutor_chat: Array.isArray(session.tutorChat) ? session.tutorChat.slice(-40) : [],
     updated_at: now
   };
   const { data, error } = await sb

@@ -4310,15 +4310,21 @@ body.preview-open {
 
 .study-flashcard-viewport {
   flex: 1;
-  overflow: hidden;
+  overflow: visible;
   touch-action: pan-y;
-  cursor: grab;
   border-radius: var(--radius-xl);
-  transition: height 0.2s ease;
+  perspective: 1200px;
 }
 
-.study-flashcard-viewport:active {
-  cursor: grabbing;
+.study-flashcard-viewport .study-flashcard {
+  width: 100%;
+}
+
+.study-flashcard-hint {
+  margin: 0.75rem 0 0;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--muted-light);
 }
 
 .study-flashcard-track {
@@ -4417,7 +4423,6 @@ body.preview-open {
   cursor: pointer;
   text-align: left;
   font: inherit;
-  perspective: 1200px;
   transition: box-shadow 0.15s, border-color 0.15s;
 }
 
@@ -4445,6 +4450,7 @@ body.preview-open {
   width: 100%;
   min-height: 140px;
   transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
   transition: transform 0.45s cubic-bezier(0.4, 0.2, 0.2, 1);
 }
 
@@ -4455,11 +4461,14 @@ body.preview-open {
 .study-flashcard-face,
 .study-flashcard-front,
 .study-flashcard-back {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
   min-height: 140px;
+  padding: 0.25rem;
   font-size: 1.05rem;
   line-height: 1.55;
   color: var(--text);
@@ -4467,22 +4476,67 @@ body.preview-open {
   word-break: break-word;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+}
+
+.study-flashcard-front {
+  transform: rotateY(0deg);
 }
 
 .study-flashcard-back {
-  position: absolute;
-  inset: 0;
   transform: rotateY(180deg);
   color: var(--accent-strong);
   font-weight: 500;
 }
 
+.study-flashcard:not(.is-flipped) .study-flashcard-front {
+  opacity: 1;
+  visibility: visible;
+}
+
+.study-flashcard:not(.is-flipped) .study-flashcard-back {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .study-flashcard.is-flipped .study-flashcard-front {
-  display: flex;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .study-flashcard.is-flipped .study-flashcard-back {
-  display: flex;
+  opacity: 1;
+  visibility: visible;
+}
+
+.study-quiz-deck {
+  margin-top: 0.5rem;
+}
+
+.study-quiz-deck-head {
+  margin-bottom: 1rem;
+}
+
+.study-quiz-deck-head .study-quiz-progress {
+  margin: 0.25rem 0 0;
+}
+
+.study-flashcard-viewport .study-quiz-card {
+  width: 100%;
+  min-height: 280px;
+  box-sizing: border-box;
+}
+
+.study-flashcard-dot.is-answered:not(.is-active) {
+  background: rgba(22, 163, 74, 0.45);
+}
+
+.study-quiz-footer {
+  margin-top: 1.25rem;
+  text-align: center;
 }
 
 .study-quiz-options {
@@ -4610,6 +4664,17 @@ body.preview-open {
   border: 1px solid var(--border);
   border-radius: 12px;
   font: inherit;
+}
+
+.tutor-message-typing p {
+  opacity: 0.65;
+  font-style: italic;
+}
+
+.tutor-form button:disabled,
+.tutor-form input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 @media (max-width: 720px) {
@@ -5606,6 +5671,56 @@ body[data-page="home"] .section:not(.hero-mg) {
 
 .study-generate-options {
   margin: 1rem 0 0.85rem;
+}
+
+.study-generate-hint {
+  margin: 0.2rem 0 0.55rem;
+  font-size: 0.82rem;
+}
+
+.dash-input-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.85rem 0 1rem;
+}
+
+.dash-input-tab {
+  padding: 0.38rem 0.72rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #f8fafc;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.dash-input-tab:hover {
+  border-color: rgba(16, 163, 127, 0.35);
+}
+
+.dash-input-tab.is-active {
+  border-color: rgba(16, 163, 127, 0.45);
+  background: rgba(16, 163, 127, 0.08);
+  color: var(--accent-strong);
+}
+
+.dash-paste-section {
+  margin-top: 0.85rem;
+}
+
+.dash-paste-text {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.study-audio-box.is-emphasis {
+  border-color: rgba(16, 163, 127, 0.35);
+  background: rgba(16, 163, 127, 0.04);
+  box-shadow: 0 0 0 1px rgba(16, 163, 127, 0.08);
 }
 
 .study-generate-picks {

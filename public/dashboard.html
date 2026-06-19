@@ -48,6 +48,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           Upload audio
         </button>
+        <button type="button" class="app-sidebar-link" data-dash-session-open="record">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+          Record lecture
+        </button>
         <button type="button" class="app-sidebar-link" data-dash-session-open="youtube">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-2C18.88 4 12 4 12 4s-6.88 0-8.59.42a2.78 2.78 0 0 0-1.95 2 29 29 0 0 0-.42 3.58 29 29 0 0 0 .42 3.58 2.78 2.78 0 0 0 1.95 2C5.12 20 12 20 12 20s6.88 0 8.59-.42a2.78 2.78 0 0 0 1.95-2 29 29 0 0 0 .42-3.58 29 29 0 0 0-.42-3.58Z"/><path d="m9.75 15.02 5.75-3.27-5.75-3.27v6.54Z"/></svg>
           YouTube video link
@@ -241,6 +245,7 @@
                 <button type="button" class="session-check-item" data-goto="flashcards" hidden><span class="check-icon">○</span> Flashcards</button>
                 <button type="button" class="session-check-item" data-goto="quiz" hidden><span class="check-icon">○</span> Quiz</button>
                 <button type="button" class="session-check-item" data-goto="podcast" hidden><span class="check-icon">○</span> Podcast</button>
+                <button type="button" class="session-check-item" data-goto="tutor" hidden><span class="check-icon">○</span> AI chat</button>
               </div>
             </div>
 
@@ -249,12 +254,14 @@
               <button type="button" class="study-tab" data-tab="flashcards" hidden>Flashcards</button>
               <button type="button" class="study-tab" data-tab="quiz" hidden>Quiz</button>
               <button type="button" class="study-tab" data-tab="podcast" hidden>Podcast</button>
+              <button type="button" class="study-tab" data-tab="tutor" hidden>AI chat</button>
             </div>
 
             <div id="study-tab-notes" class="study-tab-panel study-result" hidden></div>
             <div id="study-tab-flashcards" class="study-tab-panel" hidden></div>
             <div id="study-tab-quiz" class="study-tab-panel" hidden></div>
             <div id="study-tab-podcast" class="study-tab-panel" hidden></div>
+            <div id="study-tab-tutor" class="study-tab-panel" hidden></div>
           </section>
         </div>
       </main>
@@ -279,21 +286,39 @@
             <input type="text" id="dash-session-name" class="study-session-name" placeholder="e.g. Biology — Chapter 5" maxlength="80" />
           </label>
 
-          <div class="study-mode-panel" data-dash-mode-panel="files">
-            <div class="study-drop-card" id="dash-drop-zone">
-              <input type="file" id="dash-file-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx" hidden />
-              <button type="button" class="study-drop-btn" id="dash-file-trigger">
-                <span class="study-drop-icon">+</span>
-                <span class="study-drop-title" id="dash-drop-title">Drop study materials or click to upload</span>
-                <span class="study-drop-hint" id="dash-drop-hint">PDF · Slides · Images · Text</span>
-              </button>
-            </div>
-            <ul id="dash-file-list" class="study-file-chips" hidden></ul>
+          <div class="dash-input-tabs" id="dash-input-tabs" role="tablist" aria-label="Input source">
+            <button type="button" class="dash-input-tab is-active" data-dash-input="materials" role="tab" aria-selected="true">Materials</button>
+            <button type="button" class="dash-input-tab" data-dash-input="record" role="tab" aria-selected="false">Record</button>
+            <button type="button" class="dash-input-tab" data-dash-input="audio" role="tab" aria-selected="false">Upload audio</button>
+            <button type="button" class="dash-input-tab" data-dash-input="youtube" role="tab" aria-selected="false">YouTube</button>
+            <button type="button" class="dash-input-tab" data-dash-input="website" role="tab" aria-selected="false">Website</button>
+          </div>
 
-            <div class="study-upload-audio-stack" id="dash-audio-stack">
-              <div class="study-audio-layout" id="dash-audio-layout">
-                <div class="study-audio-box" id="dash-audio-record-box">
+          <div class="study-mode-panel" data-dash-mode-panel="files">
+            <div id="dash-materials-section">
+              <div class="study-drop-card" id="dash-drop-zone">
+                <input type="file" id="dash-file-input" multiple hidden />
+                <button type="button" class="study-drop-btn" id="dash-file-trigger">
+                  <span class="study-drop-icon">+</span>
+                  <span class="study-drop-title" id="dash-drop-title">Drop files or click to upload</span>
+                  <span class="study-drop-hint" id="dash-drop-hint">PDF · Word · Images · Slides · Sheets</span>
+                </button>
+              </div>
+              <ul id="dash-file-list" class="study-file-chips" hidden></ul>
+
+              <div class="dash-paste-section" id="dash-paste-section">
+                <label class="study-field">
+                  <span class="study-field-label">Or paste text</span>
+                  <textarea id="dash-paste-text" class="study-text-input dash-paste-text" rows="5" placeholder="Paste notes, lecture transcript, or chapter text…"></textarea>
+                </label>
+              </div>
+            </div>
+
+            <div class="study-upload-audio-stack" id="dash-audio-stack" hidden>
+              <div class="study-audio-layout is-single-column" id="dash-audio-layout">
+                <div class="study-audio-box" id="dash-audio-record-box" hidden>
                   <h3 class="study-audio-box-title">Record lecture</h3>
+                  <p class="study-audio-box-desc">Capture class or voice notes with your microphone.</p>
                   <div class="study-recorder-ui">
                     <span class="study-recorder-dot" id="dash-recorder-dot"></span>
                     <span class="study-recorder-time" id="dash-recorder-time">00:00</span>
@@ -305,10 +330,11 @@
                     <audio id="dash-record-preview" class="study-record-preview" controls hidden></audio>
                   </div>
                 </div>
-                <div class="study-audio-box" id="dash-audio-upload-box">
+                <div class="study-audio-box" id="dash-audio-upload-box" hidden>
                   <h3 class="study-audio-box-title">Upload audio</h3>
-                  <input type="file" id="dash-audio-file-input" accept="audio/*,.mp3,.m4a,.wav" hidden />
-                  <button type="button" class="button button-outline study-audio-pick-btn" id="dash-audio-file-trigger">Choose file</button>
+                  <p class="study-audio-box-desc">MP3, M4A, WAV, WEBM, or other lecture recordings.</p>
+                  <input type="file" id="dash-audio-file-input" accept="audio/*,.mp3,.m4a,.wav,.webm,.ogg" hidden />
+                  <button type="button" class="button button-outline study-audio-pick-btn" id="dash-audio-file-trigger">Choose audio file</button>
                   <p id="dash-audio-file-name" class="study-audio-picked"></p>
                 </div>
               </div>
@@ -341,9 +367,11 @@
 
           <div class="study-generate-options">
             <p class="study-field-label">What to generate</p>
+            <p class="study-result-meta study-generate-hint">Pick notes, flashcards, and quiz from your material — podcast is optional.</p>
             <div class="study-generate-picks">
               <label class="study-generate-pick"><input type="checkbox" id="dash-gen-notes" checked /> Notes</label>
               <label class="study-generate-pick"><input type="checkbox" id="dash-gen-flashcards" checked /> Flashcards</label>
+              <label class="study-generate-pick"><input type="checkbox" id="dash-gen-quiz" checked /> Practice quiz</label>
               <label class="study-generate-pick"><input type="checkbox" id="dash-gen-podcast" checked /> Podcast</label>
             </div>
           </div>
@@ -388,6 +416,6 @@
       </div>
     </div>
 
-    <script src="script.js?v=22"></script>
+    <script src="script.js?v=39"></script>
   </body>
 </html>
