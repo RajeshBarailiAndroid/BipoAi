@@ -376,7 +376,8 @@
             <li>Add <code>GEMINI_API_KEY</code> plus <code>SUPABASE_URL</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code>, <code>SUPABASE_ANON_KEY</code>, <code>SESSION_SECRET</code></li>
             <li><strong>Redeploy</strong> the project</li>
           </ol>
-          <p class="ai-setup-terminal">Or from Terminal: <code>npx vercel link</code> then <code>npm run vercel:env</code> then <code>npx vercel --prod</code></p>
+          <ul id="ai-setup-env-list" class="ai-setup-env-list" hidden></ul>
+          <p class="ai-setup-terminal">After adding vars, open <a href="/api/env/check" target="_blank" rel="noopener">/api/env/check</a> — each line should show true.</p>
           <div class="ai-setup-actions">
             <button type="button" class="button button-primary" id="ai-setup-recheck">Check again</button>
             <button type="button" class="button button-soft" data-ai-setup-close>Dismiss</button>
@@ -386,6 +387,6 @@
       </div>
     </div>
 
-    <script src="script.js?v=17"></script>
+    <script src="script.js?v=18"></script>
   </body>
 </html>

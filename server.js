@@ -238,6 +238,32 @@ app.get('/api/db/status', async (req, res) => {
   res.json(await supabase.verifyConnection());
 });
 
+// Which env vars the server sees (names only — no secret values)
+app.get('/api/env/check', (req, res) => {
+  const pick = (name) => Boolean(String(process.env[name] || '').trim());
+  const geminiKey = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  res.json({
+    vercel: Boolean(process.env.VERCEL),
+    nodeEnv: process.env.NODE_ENV || 'unknown',
+    variables: {
+      GEMINI_API_KEY: pick('GEMINI_API_KEY') || pick('GOOGLE_API_KEY'),
+      GEMINI_MODEL: pick('GEMINI_MODEL'),
+      SUPABASE_URL: pick('SUPABASE_URL'),
+      SUPABASE_SERVICE_ROLE_KEY: pick('SUPABASE_SERVICE_ROLE_KEY'),
+      SUPABASE_ANON_KEY: pick('SUPABASE_ANON_KEY'),
+      SESSION_SECRET: pick('SESSION_SECRET'),
+      GOOGLE_CLIENT_ID: pick('GOOGLE_CLIENT_ID'),
+      GOOGLE_CLIENT_SECRET: pick('GOOGLE_CLIENT_SECRET')
+    },
+    geminiKeyPrefix: geminiKey ? geminiKey.slice(0, 4) : null,
+    hint: !pick('GEMINI_API_KEY') && !pick('GOOGLE_API_KEY')
+      ? 'GEMINI_API_KEY is missing on this server. Add it in Vercel → Settings → Environment Variables → Production, then Redeploy.'
+      : geminiKey.startsWith('AQ.')
+        ? 'Key starts with AQ. — may be rejected. Use AIzaSy… from aistudio.google.com/apikey.'
+        : null
+  });
+});
+
 // Gemini chat (gemini-2.5-flash) — direct API, surfaces Google errors
 app.post('/api/chat', async (req, res) => {
   const { message, context } = req.body || {};

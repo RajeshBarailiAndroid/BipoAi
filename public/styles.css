@@ -5052,10 +5052,30 @@ body.preview-open {
   margin-top: 0.45rem;
 }
 
-.ai-setup-terminal {
-  font-size: 0.84rem;
-  color: #64748b;
+.ai-setup-env-list {
   margin: 0 0 1rem;
+  padding: 0.65rem 0.85rem;
+  list-style: none;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.84rem;
+  font-family: ui-monospace, monospace;
+}
+
+.ai-setup-env-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+}
+
+.ai-setup-env-list .is-missing {
+  color: #b45309;
+}
+
+.ai-setup-env-list .is-ok {
+  color: #15803d;
 }
 
 .ai-setup-terminal code {

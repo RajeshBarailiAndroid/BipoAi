@@ -68,6 +68,26 @@ async function parseApiResponse(res) {
   return data;
 }
 
+function renderEnvChecklist(envCheck) {
+  const list = document.getElementById('ai-setup-env-list');
+  if (!list || !envCheck?.variables) return;
+  const labels = {
+    GEMINI_API_KEY: 'GEMINI_API_KEY',
+    SUPABASE_URL: 'SUPABASE_URL',
+    SUPABASE_SERVICE_ROLE_KEY: 'SUPABASE_SERVICE_ROLE_KEY',
+    SUPABASE_ANON_KEY: 'SUPABASE_ANON_KEY',
+    SESSION_SECRET: 'SESSION_SECRET'
+  };
+  list.hidden = false;
+  list.innerHTML = Object.entries(labels).map(([key, label]) => {
+    const ok = Boolean(envCheck.variables[key]);
+    return `<li class="${ok ? 'is-ok' : 'is-missing'}"><span>${label}</span><span>${ok ? '✓ set' : '✗ missing'}</span></li>`;
+  }).join('');
+  if (envCheck.hint) {
+    list.innerHTML += `<li class="is-missing" style="margin-top:0.4rem;font-family:inherit">${envCheck.hint}</li>`;
+  }
+}
+
 async function refreshDashboardAiBanner() {
   const banner = document.getElementById('study-ai-banner');
   if (!banner || document.body.dataset.page !== 'dashboard') return false;
@@ -124,30 +144,40 @@ function initAiSetupModal() {
       statusEl.textContent = 'Checking…';
       statusEl.classList.remove('is-error');
     }
+    let envCheck = null;
+    try {
+      envCheck = await fetch('/api/env/check').then((r) => r.json());
+      renderEnvChecklist(envCheck);
+    } catch { /* ignore */ }
     const ok = await refreshDashboardAiBanner();
     if (ok) {
       closeModal();
       sessionStorage.removeItem(dismissKey);
       if (statusEl) statusEl.textContent = 'Gemini connected. You can generate real notes now.';
     } else if (statusEl) {
-      statusEl.textContent = 'Still not connected. Add env vars on Vercel and Redeploy, then check again.';
+      const missing = envCheck?.variables
+        ? Object.entries(envCheck.variables).filter(([, v]) => !v).map(([k]) => k)
+        : [];
+      statusEl.textContent = missing.length
+        ? `Still missing on server: ${missing.join(', ')}. Add in Vercel → Redeploy.`
+        : 'Variables set but Gemini not connected. Try an AIzaSy… key, then Redeploy.';
       statusEl.classList.add('is-error');
     }
   });
 
-  refreshDashboardAiBanner().then((ok) => {
-    if (!ok) {
-      fetch('/api/gemini/status')
-        .then((r) => r.json())
-        .then((status) => {
-          if (descEl && status.reason === 'auth') {
-            descEl.textContent = 'Your API key is set but rejected. Use an AIzaSy… key from Google AI Studio.';
-          }
-          openModal();
-        })
-        .catch(() => openModal());
+  Promise.all([
+    fetch('/api/gemini/status').then((r) => r.json()),
+    fetch('/api/env/check').then((r) => r.json()).catch(() => null)
+  ]).then(([status, envCheck]) => {
+    if (envCheck) renderEnvChecklist(envCheck);
+    if (status.connected) return;
+    if (descEl && status.reason === 'auth') {
+      descEl.textContent = 'Your API key is set but rejected. Use an AIzaSy… key from Google AI Studio.';
+    } else if (descEl && envCheck && !envCheck.variables?.GEMINI_API_KEY) {
+      descEl.textContent = 'The server sees zero env vars. You must add them in Vercel (not just locally in .env), then Redeploy.';
     }
-  });
+    openModal();
+  }).catch(() => openModal());
 }
 
 const PENDING_STUDY_KEY = 'bipai.pendingStudy';
