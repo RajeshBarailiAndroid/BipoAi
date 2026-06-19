@@ -1157,6 +1157,7 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
   let notes = null;
   let sourceText = text;
   let usedAi = false;
+  let flashcards = [];
   const inputType = urlMeta ? 'url' : audioOnly ? 'audio' : (text && !files.length) ? 'text' : 'files';
   const audioUrl = audioOnly && files[0]?.filename ? `/uploads/${files[0].filename}` : null;
 
@@ -1166,10 +1167,18 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
 
   if (shouldReadMaterial) {
     let notesResult;
+    let cardsFromFileResult = null;
     if (audioOnly) {
       notesResult = await tryGeminiStudy(() => gemini.generateNotesFromAudio(files[0]), 'notes-audio');
     } else if (files.length) {
-      notesResult = await tryGeminiStudy(() => gemini.generateNotes({ text, files }), 'notes-files');
+      if (canFlashcardsFromFile && generate.notes && generate.flashcards) {
+        [notesResult, cardsFromFileResult] = await Promise.all([
+          tryGeminiStudy(() => gemini.generateNotes({ text, files }), 'notes-files'),
+          tryGeminiStudy(() => gemini.generateFlashcardsFromFile(files[0]), 'flashcards-file')
+        ]);
+      } else {
+        notesResult = await tryGeminiStudy(() => gemini.generateNotes({ text, files }), 'notes-files');
+      }
     } else {
       notesResult = await tryGeminiStudy(() => gemini.generateNotes({ text }), 'notes-text');
     }
@@ -1178,6 +1187,10 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     if (!hasStudyNotes(notes)) notes = mockStudyNotes(text, files);
     notes = urlMeta ? enrichStudyNotesFromUrl(notes, urlMeta) : enrichStudyNotes(notes, text, files);
     sourceText = [...(notes.bullets || []), text].filter(Boolean).join('\n');
+    if (cardsFromFileResult) {
+      flashcards = cardsFromFileResult.value || [];
+      usedAi = usedAi || cardsFromFileResult.usedAi;
+    }
   } else if (text) {
     sourceText = text;
   }
@@ -1194,8 +1207,7 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     sourceText = [...(notes.bullets || []), text].filter(Boolean).join('\n');
   }
 
-  let flashcards = [];
-  if (generate.flashcards) {
+  if (generate.flashcards && !flashcards.length) {
     let cardsResult;
     if (files.length === 1 && !text && !audioOnly) {
       cardsResult = await tryGeminiStudy(() => gemini.generateFlashcardsFromFile(files[0]), 'flashcards-file');
@@ -1277,6 +1289,29 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     usedMockFallback: !usedAi && (generate.notes || generate.flashcards || generate.podcast)
   };
 }
+
+app.post('/api/study/flashcards', async (req, res) => {
+  const sourceText = (req.body?.sourceText || req.body?.text || '').trim();
+  if (!sourceText) {
+    return res.status(400).json({ error: 'No study material provided.' });
+  }
+
+  try {
+    const cardsResult = await tryGeminiStudy(
+      () => gemini.generateFlashcardsFromText(sourceText),
+      'flashcards-text'
+    );
+    let flashcards = cardsResult.value || [];
+    if (!flashcards.length) flashcards = mockStudyFlashcards(sourceText);
+    res.json({
+      flashcards,
+      aiUsed: cardsResult.usedAi,
+      usedMockFallback: !cardsResult.usedAi
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Flashcard generation failed.' });
+  }
+});
 
 // One upload → notes, flashcards, quiz
 app.post('/api/study', upload.array('files', 30), async (req, res) => {

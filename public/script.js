@@ -759,7 +759,7 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
 
   if (url) {
     const controller = new AbortController();
-    const timeoutMs = 180000;
+    const timeoutMs = 90000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch('/api/study/url', {
@@ -776,7 +776,7 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
       return parseApiResponse(res);
     } catch (err) {
       if (err.name === 'AbortError') {
-        throw new Error('Generation timed out after 3 minutes. Try a shorter link or upload a file instead.');
+        throw new Error('Generation timed out. Try a shorter link or turn off podcast for faster results.');
       }
       throw err;
     } finally {
@@ -791,7 +791,7 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
   fd.append('generate', JSON.stringify(gen));
 
   const controller = new AbortController();
-  const timeoutMs = 180000;
+  const timeoutMs = 90000;
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -804,12 +804,102 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
     return parseApiResponse(res);
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error('Generation timed out after 3 minutes. Try a shorter file or paste text instead.');
+      throw new Error('Generation timed out. Try a shorter file, paste text, or turn off podcast.');
     }
     throw err;
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function fetchStudyStage(path, body, timeoutMs = 90000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: authApiHeaders(true),
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+    return parseApiResponse(res);
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('This step timed out. Try again with less content or disable podcast.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/** Generate in stages so notes appear quickly; flashcards and podcast load after. */
+async function createStudySessionStaged(params, { onProgress, onPartial } = {}) {
+  const gen = params.generate || { notes: true, flashcards: true, podcast: true };
+  const outputCount = [gen.notes, gen.flashcards, gen.podcast].filter(Boolean).length;
+  if (outputCount <= 1) {
+    return createStudySession(params);
+  }
+
+  const stage1Gen = {
+    notes: gen.notes,
+    flashcards: gen.flashcards && !gen.notes,
+    podcast: false
+  };
+
+  onProgress?.(params.url ? 'Fetching your link…' : gen.notes ? 'Writing smart notes…' : 'Building flashcards…');
+  const data = await createStudySession({ ...params, generate: stage1Gen });
+
+  const emitPartial = (extra = {}) => {
+    if (!onPartial) return;
+    const merged = { ...data, ...extra };
+    onPartial({
+      ...merged,
+      _pendingFlashcards: gen.flashcards && !stage1Gen.flashcards && !(merged.flashcards || []).length,
+      _pendingPodcast: gen.podcast && !(merged.podcast?.script?.length || merged.podcast?.title)
+    });
+  };
+
+  emitPartial({
+    flashcards: stage1Gen.flashcards ? (data.flashcards || []) : [],
+    podcast: {}
+  });
+
+  if (gen.flashcards && !stage1Gen.flashcards) {
+    onProgress?.('Building flashcards…');
+    try {
+      const cardsData = await fetchStudyStage('/api/study/flashcards', {
+        sourceText: data.sourceText,
+        text: params.text || ''
+      });
+      data.flashcards = cardsData.flashcards || [];
+      if (cardsData.usedMockFallback) data.usedMockFallback = true;
+      emitPartial({ flashcards: data.flashcards, _pendingFlashcards: false });
+    } catch (err) {
+      data._flashcardsError = err.message;
+      emitPartial({ _pendingFlashcards: false });
+    }
+  }
+
+  if (gen.podcast) {
+    onProgress?.('Creating podcast script…');
+    try {
+      const podData = await fetchStudyStage('/api/podcast', {
+        text: data.sourceText || params.text || '',
+        title: data.notes?.title || 'Study podcast',
+        style: 'conversational'
+      });
+      data.podcast = podData.podcast || {};
+      emitPartial({ podcast: data.podcast, _pendingPodcast: false });
+    } catch (err) {
+      data._podcastError = err.message;
+      emitPartial({ _pendingPodcast: false });
+    }
+  }
+
+  delete data._pendingFlashcards;
+  delete data._pendingPodcast;
+  return data;
 }
 
 async function sendTutorMessage(message, context = '') {
@@ -1095,7 +1185,7 @@ function downloadAnki() {
 }
 
 // Expose for simple testing in browser console
-window.bipai = { uploadFile, uploadAudio, uploadNotesFile, uploadNotesFiles, detectFileType, fileTypeLabel, generateNotesFromText, generateQuizFromText, generatePodcast, solveProblem, createStudySession, sendTutorMessage, signIn, signUp, signInWithProvider, fetchAuthConfig, getCurrentUser, clearCurrentUser, downloadAnki, getFolders, saveFolder, deleteFolder, getDecks, saveDeck, deleteDeck };
+window.bipai = { uploadFile, uploadAudio, uploadNotesFile, uploadNotesFiles, detectFileType, fileTypeLabel, generateNotesFromText, generateQuizFromText, generatePodcast, solveProblem, createStudySession, createStudySessionStaged, sendTutorMessage, signIn, signUp, signInWithProvider, fetchAuthConfig, getCurrentUser, clearCurrentUser, downloadAnki, getFolders, saveFolder, deleteFolder, getDecks, saveDeck, deleteDeck };
 
 // Simple UI binding if upload elements exist
 document.addEventListener('DOMContentLoaded', () => {
@@ -2054,22 +2144,44 @@ document.addEventListener('DOMContentLoaded', () => {
     setStatus('');
 
     try {
-      const data = await createStudySession({
+      let opened = false;
+      const sessionTitleBase = sessionNameInput?.value.trim() || '';
+      const mode = activeMode === 'audio' ? 'audio' : activeMode === 'url' ? 'url' : 'files';
+      const data = await createStudySessionStaged({
         files,
         text,
         url,
         urlType,
-        sessionName: sessionNameInput?.value.trim() || '',
+        sessionName: sessionTitleBase,
         generate
+      }, {
+        onProgress: (msg) => { if (loadingText) loadingText.textContent = msg; },
+        onPartial: (partial) => {
+          if (!opened) {
+            hideLoading();
+            closeModal();
+            opened = true;
+          }
+          window.dispatchEvent(new CustomEvent('bipai:study-session-ready', {
+            detail: {
+              sessionTitle: resolveSessionTitle(sessionTitleBase, partial, mode, files),
+              data: partial,
+              activeMode: mode,
+              partial: Boolean(partial._pendingFlashcards || partial._pendingPodcast)
+            }
+          }));
+        }
       });
-      const sessionTitle = resolveSessionTitle(sessionNameInput?.value, data, activeMode === 'audio' ? 'audio' : activeMode === 'url' ? 'url' : 'files', files);
-      hideLoading();
-      closeModal();
+      if (!opened) {
+        hideLoading();
+        closeModal();
+      }
       window.dispatchEvent(new CustomEvent('bipai:study-session-ready', {
         detail: {
-          sessionTitle,
+          sessionTitle: resolveSessionTitle(sessionTitleBase, data, mode, files),
           data,
-          activeMode: activeMode === 'audio' ? 'audio' : activeMode === 'url' ? 'url' : 'files'
+          activeMode: mode,
+          partial: false
         }
       }));
     } catch (err) {
@@ -4247,66 +4359,86 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
-  async function applyGeneratedSession(sessionTitle, data, mode, { save = true } = {}) {
-    sessionData = data;
-    const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = data;
+  async function applyGeneratedSession(sessionTitle, data, mode, { save = true, partial = false } = {}) {
+    sessionData = { ...(sessionData || {}), ...data };
+    const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = sessionData;
+    const pendingFlashcards = Boolean(sessionData._pendingFlashcards);
+    const pendingPodcast = Boolean(sessionData._pendingPodcast);
     const hasNotes = (notes.bullets || []).length > 0;
     const hasFlashcards = flashcards.length > 0;
     const hasPodcast = Boolean(podcast.title || podcast.script?.length || podcast.audio?.audioUrl);
     const hasQuiz = (quiz.questions || []).length > 0;
-    const readingMap = syncReadingTabs({ hasNotes, hasFlashcards, hasQuiz, hasPodcast });
+    const readingMap = syncReadingTabs({
+      hasNotes,
+      hasFlashcards: hasFlashcards || pendingFlashcards,
+      hasQuiz,
+      hasPodcast: hasPodcast || pendingPodcast
+    });
 
-    const displayTitle = data.sessionName || sessionTitle;
+    const displayTitle = sessionData.sessionName || sessionTitle;
     resultsTitle.textContent = displayTitle;
     const metaParts = [
       mode === 'audio' ? 'From lecture audio' : mode === 'url' ? (notes.source || 'From web link') : notes.source,
-      hasFlashcards ? `${flashcards.length} flashcards` : '',
+      hasFlashcards ? `${flashcards.length} flashcards` : pendingFlashcards ? 'flashcards loading…' : '',
       hasQuiz ? `${quiz.questions.length} quiz questions` : '',
-      hasPodcast && podcast.audio?.audioUrl ? 'podcast ready' : hasPodcast ? 'podcast included' : ''
+      hasPodcast && podcast.audio?.audioUrl ? 'podcast ready' : hasPodcast ? 'podcast included' : pendingPodcast ? 'podcast loading…' : ''
     ].filter(Boolean);
-    if (data.usedMockFallback) {
-      metaParts.push(data.aiConfigured
+    if (sessionData.usedMockFallback) {
+      metaParts.push(sessionData.aiConfigured
         ? 'AI unavailable — showing sample content'
         : 'Add GEMINI_API_KEY on Vercel for real AI notes');
     }
     resultsMeta.textContent = metaParts.join(' · ');
 
     if (hasNotes) renderNotesPanel(notes);
-    if (hasFlashcards) {
+    if (pendingFlashcards && panels.flashcards) {
+      panels.flashcards.innerHTML = '<p class="study-loading">Building flashcards…</p>';
+    } else if (hasFlashcards) {
       renderFlashcardsPanel(flashcards);
-      if (save) saveFlashcardsDeck(displayTitle, flashcards);
+      if (save && !partial) saveFlashcardsDeck(displayTitle, flashcards);
+    } else if (sessionData._flashcardsError && panels.flashcards) {
+      panels.flashcards.innerHTML = `<p class="study-result-meta">${esc(sessionData._flashcardsError)}</p>`;
     }
     if (hasQuiz) renderQuizPanel(quiz);
-    if (hasPodcast) renderPodcastResult(panels.podcast, { podcast });
+    if (pendingPodcast && panels.podcast) {
+      panels.podcast.innerHTML = '<p class="study-loading">Creating podcast script…</p>';
+    } else if (hasPodcast) {
+      renderPodcastResult(panels.podcast, { podcast });
+    } else if (sessionData._podcastError && panels.podcast) {
+      panels.podcast.innerHTML = `<p class="study-result-meta">${esc(sessionData._podcastError)}</p>`;
+    }
 
     const firstTab = firstReadingTab(readingMap);
-    if (firstTab) switchTab(firstTab);
+    if (firstTab && !partial) switchTab(firstTab);
+    else if (firstTab && partial && !document.querySelector('#study-results .study-tab.is-active:not([hidden])')) {
+      switchTab(firstTab);
+    }
 
-    if (save) {
-      if (data.savedToDatabase && data.sessionId) {
-        currentSessionId = data.sessionId;
+    if (save && !partial) {
+      if (sessionData.savedToDatabase && sessionData.sessionId) {
+        currentSessionId = sessionData.sessionId;
         upsertSessionCache({
-          id: data.sessionId,
+          id: sessionData.sessionId,
           name: displayTitle,
           createdAt: Date.now(),
           source: notes.source || '',
-          inputType: data.inputType || inputTypeFromMode(mode),
-          inputText: data.inputText || data.sourceText || '',
-          audioUrl: data.audioUrl || null,
+          inputType: sessionData.inputType || inputTypeFromMode(mode),
+          inputText: sessionData.inputText || sessionData.sourceText || '',
+          audioUrl: sessionData.audioUrl || null,
           cardCount: flashcards.length,
           quizCount: quiz.questions?.length || 0,
           notes,
           quiz,
           flashcards,
           podcast,
-          sourceText: data.sourceText || data.inputText || ''
+          sourceText: sessionData.sourceText || sessionData.inputText || ''
         });
       } else {
-        const saved = await persistStudySession(displayTitle, { ...data, sessionId: data.sessionId }, mode);
-        currentSessionId = saved?.id || data.sessionId || null;
+        const saved = await persistStudySession(displayTitle, { ...sessionData, sessionId: sessionData.sessionId }, mode);
+        currentSessionId = saved?.id || sessionData.sessionId || null;
       }
-    } else {
-      currentSessionId = data.sessionId || null;
+    } else if (!partial) {
+      currentSessionId = sessionData.sessionId || null;
     }
     if (deleteSessionBtn) deleteSessionBtn.hidden = !currentSessionId;
     showResultsOnly();
@@ -4348,20 +4480,35 @@ document.addEventListener('DOMContentLoaded', () => {
     setStatus('');
 
     try {
-      const data = await createStudySession({
+      let firstResult = false;
+      const sessionTitleBase = sessionNameInput?.value.trim() || '';
+      const mode = activeMode === 'url' ? 'url' : activeMode === 'audio' ? 'audio' : activeMode === 'text' ? 'text' : 'files';
+      const data = await createStudySessionStaged({
         files,
         text,
         url,
-        sessionName: sessionNameInput?.value.trim() || '',
+        sessionName: sessionTitleBase,
         generate
+      }, {
+        onProgress: (msg) => {
+          if (loadingText) loadingText.textContent = msg;
+          setLoadingProgress(firstResult ? 72 : 38);
+        },
+        onPartial: async (partial) => {
+          if (!firstResult) {
+            hideLoading();
+            firstResult = true;
+          }
+          await applyGeneratedSession(
+            resolveSessionTitle(sessionTitleBase, partial, mode, files),
+            partial,
+            activeMode,
+            { save: false, partial: true }
+          );
+        }
       });
-      const sessionTitle = resolveSessionTitle(
-        sessionNameInput?.value,
-        data,
-        activeMode === 'url' ? 'url' : activeMode === 'audio' ? 'audio' : activeMode === 'text' ? 'text' : 'files',
-        files
-      );
-      await applyGeneratedSession(sessionTitle, data, activeMode);
+      const sessionTitle = resolveSessionTitle(sessionTitleBase, data, mode, files);
+      await applyGeneratedSession(sessionTitle, data, activeMode, { partial: false });
       hideLoading();
     } catch (err) {
       hideLoading();
@@ -4375,9 +4522,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const pending = takePendingStudy();
   const sessionId = new URLSearchParams(window.location.search).get('session');
   window.addEventListener('bipai:study-session-ready', async (event) => {
-    const { sessionTitle, data, activeMode: mode } = event.detail || {};
+    const { sessionTitle, data, activeMode: mode, partial } = event.detail || {};
     if (!data) return;
-    await applyGeneratedSession(sessionTitle, data, mode || 'files');
+    await applyGeneratedSession(sessionTitle, data, mode || 'files', { save: !partial, partial: Boolean(partial) });
   });
   if (pending) {
     const { sessionTitle, data, activeMode: pendingMode } = pending;
