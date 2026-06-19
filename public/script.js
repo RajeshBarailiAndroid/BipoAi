@@ -105,7 +105,7 @@ async function refreshDashboardAiBanner() {
     }
     banner.hidden = false;
     if (status.reason === 'no_key') {
-      banner.textContent = 'AI is off on bipoai.com. Add GEMINI_API_KEY in Vercel (AIzaSy… from aistudio.google.com/apikey), then Redeploy.';
+      banner.innerHTML = 'AI is off on production — <a href="setup.html">connect Gemini on Vercel</a>, then Redeploy.';
     } else if (status.reason === 'auth') {
       banner.textContent = status.message || 'Gemini key rejected. Use an AIzaSy… key from aistudio.google.com/apikey.';
     } else {

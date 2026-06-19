@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Connect Gemini on production — BipoAi</title>
+    <link rel="stylesheet" href="styles.css?v=openai-tint" />
+  </head>
+  <body data-page="setup">
+    <header class="topbar">
+      <div class="container topbar-inner">
+        <a class="brand" href="index.html">BipoAi</a>
+        <nav class="nav-links">
+          <a href="dashboard.html">Ai Study +</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="container" style="max-width:720px;padding:2rem 1rem 4rem">
+      <h1 style="margin:0 0 0.5rem">Connect Gemini on production</h1>
+      <p style="color:var(--muted);line-height:1.6">Local dev uses your Mac <code>.env</code> file. <strong>bipoai.com</strong> uses Vercel — you must add the same secrets there and redeploy.</p>
+
+      <section class="product-card" style="margin-top:1.5rem;padding:1.25rem">
+        <h2 style="margin:0 0 0.75rem;font-size:1.1rem">Live server status</h2>
+        <p id="setup-status-line" class="study-status-msg">Checking…</p>
+        <ul id="setup-env-list" class="ai-setup-env-list" hidden></ul>
+        <p style="margin:1rem 0 0"><a href="/api/env/check" target="_blank" rel="noopener">Open /api/env/check</a> · <a href="/api/gemini/status" target="_blank" rel="noopener">Open /api/gemini/status</a></p>
+      </section>
+
+      <section class="product-card" style="margin-top:1rem;padding:1.25rem">
+        <h2 style="margin:0 0 0.75rem;font-size:1.1rem">Fix in 5 steps</h2>
+        <ol class="ai-setup-steps">
+          <li>On your Mac, in the BipoAi project folder, run: <code>npm run vercel:import-file</code></li>
+          <li>Open <a href="https://vercel.com/dashboard" target="_blank" rel="noopener">vercel.com/dashboard</a> → project for <strong>bipoai.com</strong></li>
+          <li><strong>Settings → Environment Variables → Import .env</strong> (upload <code>vercel-import.env</code>)</li>
+          <li>Enable <strong>Production</strong>, Preview, and Development → <strong>Save</strong></li>
+          <li><strong>Deployments → Redeploy</strong> (required — saving alone is not enough)</li>
+        </ol>
+      </section>
+
+      <section class="product-card" style="margin-top:1rem;padding:1.25rem">
+        <h2 style="margin:0 0 0.75rem;font-size:1.1rem">Required variables</h2>
+        <p style="margin:0 0 0.5rem;color:var(--muted);font-size:0.92rem">Use these exact names in Vercel:</p>
+        <ul style="margin:0;padding-left:1.2rem;line-height:1.8">
+          <li><code>GEMINI_API_KEY</code> — from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> (<code>AIzaSy…</code> recommended)</li>
+          <li><code>GEMINI_MODEL</code> · <code>GEMINI_SOLVE_MODEL</code></li>
+          <li><code>SUPABASE_URL</code> · <code>SUPABASE_SERVICE_ROLE_KEY</code> · <code>SUPABASE_ANON_KEY</code></li>
+          <li><code>SESSION_SECRET</code> · <code>GOOGLE_CLIENT_ID</code> · <code>GOOGLE_CLIENT_SECRET</code></li>
+        </ul>
+      </section>
+
+      <p style="margin-top:1.5rem">
+        <button type="button" class="button button-primary" id="setup-recheck">Check again</button>
+        <a class="button button-soft" href="dashboard.html" style="margin-left:0.5rem">Back to dashboard</a>
+      </p>
+    </main>
+
+    <script>
+      const statusLine = document.getElementById('setup-status-line');
+      const envList = document.getElementById('setup-env-list');
+      const labels = {
+        GEMINI_API_KEY: 'GEMINI_API_KEY',
+        GEMINI_MODEL: 'GEMINI_MODEL',
+        SUPABASE_URL: 'SUPABASE_URL',
+        SUPABASE_SERVICE_ROLE_KEY: 'SUPABASE_SERVICE_ROLE_KEY',
+        SUPABASE_ANON_KEY: 'SUPABASE_ANON_KEY',
+        SESSION_SECRET: 'SESSION_SECRET'
+      };
+
+      async function refresh() {
+        statusLine.textContent = 'Checking…';
+        statusLine.classList.remove('is-error');
+        try {
+          const [env, gemini] = await Promise.all([
+            fetch('/api/env/check').then((r) => r.json()),
+            fetch('/api/gemini/status').then((r) => r.json())
+          ]);
+          envList.hidden = false;
+          envList.innerHTML = Object.entries(labels).map(([key, label]) => {
+            const ok = Boolean(env.variables?.[key]);
+            return `<li class="${ok ? 'is-ok' : 'is-missing'}"><span>${label}</span><span>${ok ? '✓ set' : '✗ missing'}</span></li>`;
+          }).join('');
+          if (env.hint) {
+            envList.innerHTML += `<li class="is-missing" style="margin-top:0.4rem;font-family:inherit">${env.hint}</li>`;
+          }
+          if (env.note) {
+            envList.innerHTML += `<li class="is-missing" style="margin-top:0.4rem;font-family:inherit">${env.note}</li>`;
+          }
+          if (gemini.connected) {
+            statusLine.textContent = '✓ Gemini connected on production. AI features should work now.';
+          } else if (env.geminiConfigured === false) {
+            statusLine.textContent = '✗ No API key on this server yet. Complete the Vercel steps above, then Redeploy.';
+            statusLine.classList.add('is-error');
+          } else {
+            statusLine.textContent = gemini.message || 'Key is set but Gemini is not connected. Try an AIzaSy… key.';
+            statusLine.classList.add('is-error');
+          }
+        } catch {
+          statusLine.textContent = 'Could not reach the API. Try again in a moment.';
+          statusLine.classList.add('is-error');
+        }
+      }
+
+      document.getElementById('setup-recheck').addEventListener('click', refresh);
+      refresh();
+    </script>
+  </body>
+</html>

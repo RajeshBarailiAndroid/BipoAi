@@ -5,7 +5,10 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const https = require('https');
-require('dotenv').config();
+// Local dev loads .env; Vercel injects vars from Project → Settings → Environment Variables
+if (!process.env.VERCEL) {
+  require('dotenv').config();
+}
 
 const {
   verifyGoogleAuthCode,
@@ -306,7 +309,10 @@ app.get('/api/env/check', (req, res) => {
     missing,
     geminiKeyPrefix: geminiKey ? geminiKey.slice(0, 4) : null,
     hint,
-    verifyUrl: '/api/gemini/status'
+    verifyUrl: '/api/gemini/status',
+    note: process.env.VERCEL
+      ? 'Your Mac .env file is NOT uploaded to Vercel (.vercelignore). Add each variable in Vercel → Settings → Environment Variables → Production, then Redeploy.'
+      : 'Local server reads .env from this project folder. Production (bipoai.com) uses Vercel dashboard env vars only.'
   });
 });
 

@@ -371,14 +371,14 @@
         </div>
         <div class="study-modal-body">
           <ol class="ai-setup-steps">
-            <li>In Terminal: <code>cd /Users/rajeshbaraili/Projects/BipAi && npm run vercel:import-file</code></li>
-            <li>Open <a href="https://vercel.com/dashboard" target="_blank" rel="noopener">vercel.com/dashboard</a> → <strong>BipoAi</strong> project</li>
-            <li><strong>Settings → Environment Variables → Import .env</strong> (upload <code>vercel-import.env</code> or paste its contents)</li>
-            <li>Check <strong>Production</strong>, Preview, Development → Save</li>
+            <li>On your Mac: <code>npm run vercel:import-file</code> in the BipoAi project folder</li>
+            <li>Open <a href="https://vercel.com/dashboard" target="_blank" rel="noopener">vercel.com/dashboard</a> → project for <strong>bipoai.com</strong></li>
+            <li><strong>Settings → Environment Variables → Import .env</strong> (upload <code>vercel-import.env</code>)</li>
+            <li>Enable <strong>Production</strong>, Preview, Development → <strong>Save</strong></li>
             <li><strong>Deployments → Redeploy</strong> (required — saving alone is not enough)</li>
           </ol>
           <ul id="ai-setup-env-list" class="ai-setup-env-list" hidden></ul>
-          <p class="ai-setup-terminal">After adding vars, open <a href="/api/env/check" target="_blank" rel="noopener">/api/env/check</a> — each line should show true.</p>
+          <p class="ai-setup-terminal">Full guide: <a href="setup.html">Production setup</a> · <a href="/api/env/check" target="_blank" rel="noopener">/api/env/check</a></p>
           <div class="ai-setup-actions">
             <button type="button" class="button button-primary" id="ai-setup-recheck">Reconnect API</button>
             <button type="button" class="button button-soft" data-ai-setup-close>Dismiss</button>
