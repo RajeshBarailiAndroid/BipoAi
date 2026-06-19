@@ -66,6 +66,23 @@ async function parseApiResponse(res) {
 
 const PENDING_STUDY_KEY = 'bipai.pendingStudy';
 
+function exitDashboardStudyView() {
+  document.body.classList.remove('study-has-session');
+  const workspaceEl = document.getElementById('study-workspace');
+  const resultsEl = document.getElementById('study-results');
+  if (workspaceEl) workspaceEl.hidden = true;
+  if (resultsEl) resultsEl.hidden = true;
+  const url = new URL(window.location.href);
+  if (url.searchParams.has('session')) {
+    url.searchParams.delete('session');
+    history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+}
+
+function notifyDashboardPanelChange(panelKey) {
+  window.dispatchEvent(new CustomEvent('bipai:dashboard-panel', { detail: { panel: panelKey } }));
+}
+
 function slimStudySessionForStorage(payload, { aggressive = false } = {}) {
   const clone = JSON.parse(JSON.stringify(payload));
   const audio = clone.data?.podcast?.audio;
@@ -1007,6 +1024,7 @@ function initAppSidebar() {
   }
 
   function showDashPanel(key) {
+    exitDashboardStudyView();
     dashPanels.forEach((panel) => {
       panel.hidden = panel.dataset.dashPanel !== key;
     });
@@ -1014,6 +1032,7 @@ function initAppSidebar() {
       item.classList.toggle('is-active', dashPanelKey(item) === key);
     });
     history.replaceState(null, '', `#dashboard-${key}`);
+    notifyDashboardPanelChange(key);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -1047,6 +1066,11 @@ function initAppSidebar() {
       const validKeys = dashPanels.map((panel) => panel.dataset.dashPanel);
       showDashPanel(validKeys.includes(hashKey) ? hashKey : 'overview');
     }
+    window.addEventListener('hashchange', () => {
+      const hashKey = location.hash.replace('#dashboard-', '');
+      const validKeys = dashPanels.map((panel) => panel.dataset.dashPanel);
+      if (validKeys.includes(hashKey)) showDashPanel(hashKey);
+    });
   }
 
   const searchInput = sidebar.querySelector('.app-sidebar-search input');
@@ -1644,10 +1668,20 @@ document.addEventListener('DOMContentLoaded', ()=>{
     }
   });
 
+  window.addEventListener('bipai:dashboard-panel', async () => {
+    await refreshAllData();
+    renderDashboardStats();
+    renderSessions();
+    renderDecks();
+    renderFolders();
+  });
+
   (async () => {
     await refreshAllData();
     renderDashboardStats();
     renderSessions();
+    renderDecks();
+    renderFolders();
   })();
 });
 
@@ -3673,6 +3707,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function showDashOverview() {
+    exitDashboardStudyView();
     dashPanels.forEach((panel) => {
       panel.hidden = panel.dataset.dashPanel !== 'overview';
     });
@@ -3680,6 +3715,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const href = item.getAttribute('href') || '';
       item.classList.toggle('is-active', href === '#dashboard-overview');
     });
+    history.replaceState(null, '', '#dashboard-overview');
+    notifyDashboardPanelChange('overview');
   }
 
   function showResultsOnly() {
@@ -3693,20 +3730,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function showCreateForm() {
-    document.body.classList.remove('study-has-session');
-    if (workspaceEl) workspaceEl.hidden = true;
-    resultsEl.hidden = true;
     sessionData = null;
     currentSessionId = null;
     if (deleteSessionBtn) deleteSessionBtn.hidden = true;
     if (isDashboard) {
-      history.replaceState({}, '', 'dashboard.html');
       showDashOverview();
     } else {
+      exitDashboardStudyView();
       history.replaceState({}, '', 'dashboard.html');
       hub?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }
+
+  window.addEventListener('bipai:dashboard-panel', () => {
+    sessionData = null;
+    currentSessionId = null;
+    if (deleteSessionBtn) deleteSessionBtn.hidden = true;
+  });
 
   function syncReadingTabs(flags) {
     const map = {
