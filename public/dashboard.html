@@ -356,6 +356,36 @@
       </div>
     </div>
 
-    <script src="script.js?v=16"></script>
+    <div id="ai-setup-modal" class="study-modal" hidden aria-hidden="true">
+      <div class="study-modal-backdrop" data-ai-setup-close></div>
+      <div class="study-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-setup-title">
+        <button type="button" class="study-modal-close" data-ai-setup-close aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+        <div class="study-modal-header">
+          <span class="study-modal-icon" aria-hidden="true">⚠️</span>
+          <div>
+            <h3 id="ai-setup-title">AI is not connected on bipoai.com</h3>
+            <p id="ai-setup-desc">Uploads work, but notes are placeholder text until Gemini is configured on Vercel.</p>
+          </div>
+        </div>
+        <div class="study-modal-body">
+          <ol class="ai-setup-steps">
+            <li>Get an <strong>AIzaSy…</strong> key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> (AQ. keys usually fail).</li>
+            <li>Vercel → your project → <strong>Settings → Environment Variables</strong></li>
+            <li>Add <code>GEMINI_API_KEY</code> plus <code>SUPABASE_URL</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code>, <code>SUPABASE_ANON_KEY</code>, <code>SESSION_SECRET</code></li>
+            <li><strong>Redeploy</strong> the project</li>
+          </ol>
+          <p class="ai-setup-terminal">Or from Terminal: <code>npx vercel link</code> then <code>npm run vercel:env</code> then <code>npx vercel --prod</code></p>
+          <div class="ai-setup-actions">
+            <button type="button" class="button button-primary" id="ai-setup-recheck">Check again</button>
+            <button type="button" class="button button-soft" data-ai-setup-close>Dismiss</button>
+          </div>
+          <p id="ai-setup-status" class="study-status-msg" hidden></p>
+        </div>
+      </div>
+    </div>
+
+    <script src="script.js?v=17"></script>
   </body>
 </html>

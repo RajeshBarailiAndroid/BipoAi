@@ -5041,6 +5041,33 @@ body.preview-open {
   max-width: 52rem;
 }
 
+.ai-setup-steps {
+  margin: 0 0 1rem;
+  padding-left: 1.2rem;
+  line-height: 1.55;
+  color: var(--text, #334155);
+}
+
+.ai-setup-steps li + li {
+  margin-top: 0.45rem;
+}
+
+.ai-setup-terminal {
+  font-size: 0.84rem;
+  color: #64748b;
+  margin: 0 0 1rem;
+}
+
+.ai-setup-terminal code {
+  font-size: 0.8rem;
+}
+
+.ai-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .session-check-item:hover:not(.session-checklist-demo .session-check-item) {
   border-color: var(--accent);
   color: var(--accent);

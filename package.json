@@ -8,7 +8,8 @@
     "start:https": "HTTPS=true node server.js",
     "ssl:generate": "bash scripts/generate-ssl.sh",
     "dev": "nodemon server.js",
-    "vercel-build": "echo 'No build step'"
+    "vercel-build": "echo 'No build step'",
+    "vercel:env": "bash scripts/sync-vercel-env.sh"
   },
   "engines": {
     "node": ">=18"

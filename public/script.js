@@ -9,7 +9,10 @@ document.addEventListener('DOMContentLoaded', () => {
   updateNavAuth();
   initAppNav();
   initAppSidebar();
-  if (document.body.dataset.page === 'dashboard') refreshDashboardAiBanner();
+  if (document.body.dataset.page === 'dashboard') {
+    refreshDashboardAiBanner();
+    initAiSetupModal();
+  }
 
   const links = document.querySelectorAll('.nav-links a[href^="#"]');
   links.forEach((link) => {
@@ -67,24 +70,84 @@ async function parseApiResponse(res) {
 
 async function refreshDashboardAiBanner() {
   const banner = document.getElementById('study-ai-banner');
-  if (!banner || document.body.dataset.page !== 'dashboard') return;
+  if (!banner || document.body.dataset.page !== 'dashboard') return false;
   try {
     const status = await fetch('/api/gemini/status').then((r) => r.json());
     if (status.connected) {
       banner.hidden = true;
-      return;
+      return true;
     }
     banner.hidden = false;
     if (status.reason === 'no_key') {
-      banner.textContent = 'AI is off on bipoai.com. In Vercel → Settings → Environment Variables, add GEMINI_API_KEY using an AIzaSy… key from aistudio.google.com/apikey, then Redeploy.';
+      banner.textContent = 'AI is off on bipoai.com. Add GEMINI_API_KEY in Vercel (AIzaSy… from aistudio.google.com/apikey), then Redeploy.';
     } else if (status.reason === 'auth') {
-      banner.textContent = status.message || 'Gemini key rejected. Use an AIzaSy… key from aistudio.google.com/apikey (AQ. keys often do not work).';
+      banner.textContent = status.message || 'Gemini key rejected. Use an AIzaSy… key from aistudio.google.com/apikey.';
     } else {
       banner.textContent = status.message || 'Gemini is not connected on this server.';
     }
+    return false;
   } catch {
-    /* offline */
+    return false;
   }
+}
+
+function initAiSetupModal() {
+  if (document.body.dataset.page !== 'dashboard') return;
+  const modal = document.getElementById('ai-setup-modal');
+  if (!modal) return;
+  const statusEl = document.getElementById('ai-setup-status');
+  const descEl = document.getElementById('ai-setup-desc');
+  const recheckBtn = document.getElementById('ai-setup-recheck');
+  const dismissKey = 'bipai.aiSetupDismissed';
+
+  function openModal() {
+    if (sessionStorage.getItem(dismissKey) === '1') return;
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('modal-open');
+  }
+
+  function closeModal() {
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('modal-open');
+    sessionStorage.setItem(dismissKey, '1');
+  }
+
+  modal.querySelectorAll('[data-ai-setup-close]').forEach((el) => {
+    el.addEventListener('click', closeModal);
+  });
+
+  recheckBtn?.addEventListener('click', async () => {
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = 'Checking…';
+      statusEl.classList.remove('is-error');
+    }
+    const ok = await refreshDashboardAiBanner();
+    if (ok) {
+      closeModal();
+      sessionStorage.removeItem(dismissKey);
+      if (statusEl) statusEl.textContent = 'Gemini connected. You can generate real notes now.';
+    } else if (statusEl) {
+      statusEl.textContent = 'Still not connected. Add env vars on Vercel and Redeploy, then check again.';
+      statusEl.classList.add('is-error');
+    }
+  });
+
+  refreshDashboardAiBanner().then((ok) => {
+    if (!ok) {
+      fetch('/api/gemini/status')
+        .then((r) => r.json())
+        .then((status) => {
+          if (descEl && status.reason === 'auth') {
+            descEl.textContent = 'Your API key is set but rejected. Use an AIzaSy… key from Google AI Studio.';
+          }
+          openModal();
+        })
+        .catch(() => openModal());
+    }
+  });
 }
 
 const PENDING_STUDY_KEY = 'bipai.pendingStudy';
