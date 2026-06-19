@@ -4404,7 +4404,7 @@ body.preview-open {
   position: relative;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   justify-content: flex-start;
   width: 100%;
   min-height: 220px;
@@ -4417,7 +4417,8 @@ body.preview-open {
   cursor: pointer;
   text-align: left;
   font: inherit;
-  transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s;
+  perspective: 1200px;
+  transition: box-shadow 0.15s, border-color 0.15s;
 }
 
 .study-flashcard:hover {
@@ -4427,6 +4428,7 @@ body.preview-open {
 
 .study-flashcard-label {
   display: inline-block;
+  align-self: flex-start;
   margin-bottom: 0.65rem;
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
@@ -4438,29 +4440,49 @@ body.preview-open {
   letter-spacing: 0.04em;
 }
 
+.study-flashcard-inner {
+  position: relative;
+  width: 100%;
+  min-height: 140px;
+  transform-style: preserve-3d;
+  transition: transform 0.45s cubic-bezier(0.4, 0.2, 0.2, 1);
+}
+
+.study-flashcard.is-flipped .study-flashcard-inner {
+  transform: rotateY(180deg);
+}
+
+.study-flashcard-face,
 .study-flashcard-front,
 .study-flashcard-back {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
+  min-height: 140px;
   font-size: 1.05rem;
   line-height: 1.55;
   color: var(--text);
   white-space: normal;
   word-break: break-word;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 
 .study-flashcard-back {
-  display: none;
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
   color: var(--accent-strong);
   font-weight: 500;
 }
 
 .study-flashcard.is-flipped .study-flashcard-front {
-  display: none;
+  display: flex;
 }
 
 .study-flashcard.is-flipped .study-flashcard-back {
-  display: block;
+  display: flex;
 }
 
 .study-quiz-options {

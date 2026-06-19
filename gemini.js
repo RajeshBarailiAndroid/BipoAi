@@ -23,7 +23,7 @@ function parseApiKeys() {
     .map(cleanKey)
     .filter(Boolean);
   keys.push(...fromList);
-  for (const envName of ['GEMINI_API_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3', 'GOOGLE_API_KEY']) {
+  for (const envName of ['GEMINI_API_KEY', 'GEMINI_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_API_KEY']) {
     const value = cleanKey(process.env[envName]);
     if (value && !keys.includes(value)) keys.push(value);
   }
@@ -158,7 +158,7 @@ function authHelpMessage() {
 
 async function verifyConnection() {
   if (!isGeminiEnabled()) {
-    return { ok: false, reason: 'no_key', message: 'Set GEMINI_API_KEY (or _2/_3) or GOOGLE_APPLICATION_CREDENTIALS in .env' };
+    return { ok: false, reason: 'no_key', message: 'Set GEMINI_API_KEY (or GEMINI_KEY / GOOGLE_API_KEY) in .env or Vercel' };
   }
 
   if (useVertexAI()) {

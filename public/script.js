@@ -73,6 +73,9 @@ function renderEnvChecklist(envCheck) {
   if (!list || !envCheck?.variables) return;
   const labels = {
     GEMINI_API_KEY: 'GEMINI_API_KEY',
+    GEMINI_KEY: 'GEMINI_KEY (alias)',
+    GOOGLE_API_KEY: 'GOOGLE_API_KEY',
+    GEMINI_MODEL: 'GEMINI_MODEL',
     SUPABASE_URL: 'SUPABASE_URL',
     SUPABASE_SERVICE_ROLE_KEY: 'SUPABASE_SERVICE_ROLE_KEY',
     SUPABASE_ANON_KEY: 'SUPABASE_ANON_KEY',
@@ -80,9 +83,12 @@ function renderEnvChecklist(envCheck) {
   };
   list.hidden = false;
   list.innerHTML = Object.entries(labels).map(([key, label]) => {
-    const ok = Boolean(envCheck.variables[key]);
+    const ok = Boolean(envCheck.variables?.[key]);
     return `<li class="${ok ? 'is-ok' : 'is-missing'}"><span>${label}</span><span>${ok ? '✓ set' : '✗ missing'}</span></li>`;
   }).join('');
+  if (envCheck.geminiConfigured === false) {
+    list.innerHTML += '<li class="is-missing" style="margin-top:0.4rem;font-family:inherit">No Gemini key on this server — add GEMINI_API_KEY in Vercel Production, then Redeploy.</li>';
+  }
   if (envCheck.hint) {
     list.innerHTML += `<li class="is-missing" style="margin-top:0.4rem;font-family:inherit">${envCheck.hint}</li>`;
   }
@@ -176,7 +182,7 @@ function initAiSetupModal() {
     if (status.connected) return;
     if (descEl && status.reason === 'auth') {
       descEl.textContent = 'Your API key is set but rejected. Use an AIzaSy… key from Google AI Studio.';
-    } else if (descEl && envCheck && !envCheck.variables?.GEMINI_API_KEY) {
+    } else if (descEl && envCheck && envCheck.geminiConfigured === false) {
       descEl.textContent = 'The server sees zero env vars. You must add them in Vercel (not just locally in .env), then Redeploy.';
     }
     openModal();
@@ -4297,14 +4303,20 @@ document.addEventListener('DOMContentLoaded', () => {
           </button>
           <div class="study-flashcard-viewport" data-fc-viewport>
             <div class="study-flashcard-track" data-fc-track>
-              ${items.map((c) => `
+              ${items.map((c) => {
+                const q = esc(c.q || c.question || c.front || '');
+                const a = esc(c.a || c.answer || c.back || '');
+                return `
                 <div class="study-flashcard-slide">
-                  <button type="button" class="study-flashcard" data-flip-card>
+                  <button type="button" class="study-flashcard" data-flip-card aria-pressed="false">
                     <span class="study-flashcard-label">Question</span>
-                    <span class="study-flashcard-front">${esc(c.q)}</span>
-                    <span class="study-flashcard-back">${esc(c.a)}</span>
+                    <div class="study-flashcard-inner">
+                      <span class="study-flashcard-face study-flashcard-front">${q}</span>
+                      <span class="study-flashcard-face study-flashcard-back">${a}</span>
+                    </div>
                   </button>
-                </div>`).join('')}
+                </div>`;
+              }).join('')}
             </div>
           </div>
           <button type="button" class="study-flashcard-nav study-flashcard-next" data-fc-next aria-label="Next card">
@@ -4341,6 +4353,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (slide) viewport.style.height = `${slide.offsetHeight}px`;
     }
 
+    function flipCard(card, flipped) {
+      const showAnswer = flipped ?? !card.classList.contains('is-flipped');
+      card.classList.toggle('is-flipped', showAnswer);
+      card.setAttribute('aria-pressed', showAnswer ? 'true' : 'false');
+      const label = card.querySelector('.study-flashcard-label');
+      if (label) label.textContent = showAnswer ? 'Answer' : 'Question';
+      requestAnimationFrame(syncViewportHeight);
+    }
+
     function goTo(i, animate = true) {
       index = Math.max(0, Math.min(items.length - 1, i));
       updateTrack(animate);
@@ -4348,7 +4369,7 @@ document.addEventListener('DOMContentLoaded', () => {
       dots.forEach((d, di) => d.classList.toggle('is-active', di === index));
       prevBtn.disabled = index === 0;
       nextBtn.disabled = index === items.length - 1;
-      deck.querySelectorAll('.study-flashcard.is-flipped').forEach((c) => c.classList.remove('is-flipped'));
+      deck.querySelectorAll('.study-flashcard.is-flipped').forEach((c) => flipCard(c, false));
       deck.querySelectorAll('.study-flashcard-slide').forEach((slide, si) => {
         const label = slide.querySelector('.study-flashcard-label');
         if (label) label.textContent = si === index ? 'Question' : '';
@@ -4361,16 +4382,18 @@ document.addEventListener('DOMContentLoaded', () => {
     dots.forEach((d) => d.addEventListener('click', () => goTo(Number(d.dataset.fcDot))));
 
     deck.querySelectorAll('[data-flip-card]').forEach((card) => {
-      card.addEventListener('click', (e) => {
+      card.addEventListener('pointerdown', (e) => {
         e.stopPropagation();
-        card.classList.toggle('is-flipped');
-        const label = card.querySelector('.study-flashcard-label');
-        if (label) label.textContent = card.classList.contains('is-flipped') ? 'Answer' : 'Question';
-        requestAnimationFrame(syncViewportHeight);
+      });
+      card.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        flipCard(card);
       });
     });
 
     viewport.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('[data-flip-card]')) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       dragging = true;
       startX = e.clientX;

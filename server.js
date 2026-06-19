@@ -251,12 +251,50 @@ app.get('/api/db/status', async (req, res) => {
 // Which env vars the server sees (names only — no secret values)
 app.get('/api/env/check', (req, res) => {
   const pick = (name) => Boolean(String(process.env[name] || '').trim());
-  const geminiKey = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const geminiKey = String(
+    process.env.GEMINI_API_KEY
+    || process.env.GEMINI_KEY
+    || process.env.GOOGLE_API_KEY
+    || process.env.GOOGLE_GENAI_API_KEY
+    || ''
+  ).trim().replace(/^["']|["']$/g, '');
+  const geminiConfigured = pick('GEMINI_API_KEY')
+    || pick('GEMINI_KEY')
+    || pick('GOOGLE_API_KEY')
+    || pick('GOOGLE_GENAI_API_KEY');
+  const missing = [
+    !geminiConfigured && 'GEMINI_API_KEY (or GEMINI_KEY)',
+    !pick('GEMINI_MODEL') && 'GEMINI_MODEL',
+    !pick('SUPABASE_URL') && 'SUPABASE_URL',
+    !pick('SUPABASE_SERVICE_ROLE_KEY') && 'SUPABASE_SERVICE_ROLE_KEY',
+    !pick('SUPABASE_ANON_KEY') && 'SUPABASE_ANON_KEY',
+    !pick('SESSION_SECRET') && 'SESSION_SECRET'
+  ].filter(Boolean);
+
+  let hint = null;
+  if (!geminiConfigured) {
+    hint = process.env.VERCEL
+      ? 'Production server sees no Gemini key. In Vercel → Environment Variables, add GEMINI_API_KEY (recommended) or GEMINI_KEY — enable Production, Save, then Redeploy.'
+      : 'Gemini key missing. Use GEMINI_API_KEY in .env (GEMINI_KEY also works) and restart the server.';
+  } else if (geminiKey.startsWith('AQ.')) {
+    hint = 'Key starts with AQ. — if auth fails after redeploy, use an AIzaSy… key from aistudio.google.com/apikey.';
+  } else if (pick('GEMINI_KEY') && !pick('GEMINI_API_KEY')) {
+    hint = 'GEMINI_KEY is set and works. For clarity you can rename it to GEMINI_API_KEY in Vercel.';
+  } else if (pick('GOOGLE_API_KEY') && !pick('GEMINI_API_KEY')) {
+    hint = 'GOOGLE_API_KEY is set but GEMINI_API_KEY is not — both work; you can rename to GEMINI_API_KEY for clarity.';
+  }
+
   res.json({
     vercel: Boolean(process.env.VERCEL),
+    vercelEnv: process.env.VERCEL_ENV || null,
+    deploymentId: process.env.VERCEL_DEPLOYMENT_ID || null,
     nodeEnv: process.env.NODE_ENV || 'unknown',
+    geminiConfigured,
     variables: {
-      GEMINI_API_KEY: pick('GEMINI_API_KEY') || pick('GOOGLE_API_KEY'),
+      GEMINI_API_KEY: pick('GEMINI_API_KEY'),
+      GEMINI_KEY: pick('GEMINI_KEY'),
+      GOOGLE_API_KEY: pick('GOOGLE_API_KEY'),
+      GOOGLE_GENAI_API_KEY: pick('GOOGLE_GENAI_API_KEY'),
       GEMINI_MODEL: pick('GEMINI_MODEL'),
       SUPABASE_URL: pick('SUPABASE_URL'),
       SUPABASE_SERVICE_ROLE_KEY: pick('SUPABASE_SERVICE_ROLE_KEY'),
@@ -265,12 +303,10 @@ app.get('/api/env/check', (req, res) => {
       GOOGLE_CLIENT_ID: pick('GOOGLE_CLIENT_ID'),
       GOOGLE_CLIENT_SECRET: pick('GOOGLE_CLIENT_SECRET')
     },
+    missing,
     geminiKeyPrefix: geminiKey ? geminiKey.slice(0, 4) : null,
-    hint: !pick('GEMINI_API_KEY') && !pick('GOOGLE_API_KEY')
-      ? 'GEMINI_API_KEY is missing on this server. Add it in Vercel → Settings → Environment Variables → Production, then Redeploy.'
-      : geminiKey.startsWith('AQ.')
-        ? 'Key starts with AQ. — may be rejected. Use AIzaSy… from aistudio.google.com/apikey.'
-        : null
+    hint,
+    verifyUrl: '/api/gemini/status'
   });
 });
 
