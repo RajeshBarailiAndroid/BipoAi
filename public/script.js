@@ -4218,12 +4218,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const displayTitle = data.sessionName || sessionTitle;
     resultsTitle.textContent = displayTitle;
-    resultsMeta.textContent = [
+    const metaParts = [
       mode === 'audio' ? 'From lecture audio' : mode === 'url' ? (notes.source || 'From web link') : notes.source,
       hasFlashcards ? `${flashcards.length} flashcards` : '',
       hasQuiz ? `${quiz.questions.length} quiz questions` : '',
       hasPodcast && podcast.audio?.audioUrl ? 'podcast ready' : hasPodcast ? 'podcast included' : ''
-    ].filter(Boolean).join(' · ');
+    ].filter(Boolean);
+    if (data.usedMockFallback) {
+      metaParts.push(data.aiConfigured
+        ? 'AI unavailable — showing sample content'
+        : 'Add GEMINI_API_KEY on Vercel for real AI notes');
+    }
+    resultsMeta.textContent = metaParts.join(' · ');
 
     if (hasNotes) renderNotesPanel(notes);
     if (hasFlashcards) {

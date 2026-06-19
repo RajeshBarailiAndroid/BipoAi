@@ -186,6 +186,27 @@ async function tryGemini(fn) {
   }
 }
 
+/** Study generation: never fail the whole session when Gemini errors. */
+async function tryGeminiStudy(fn, label = 'study') {
+  if (!gemini.shouldUseGemini()) return { value: null, usedAi: false };
+  try {
+    const value = await fn();
+    return { value, usedAi: value != null };
+  } catch (err) {
+    if (gemini.isAuthError(err)) {
+      gemini.markUnavailable();
+      console.warn(`Gemini ${label} auth failed:`, gemini.authHelpMessage());
+    } else {
+      console.warn(`Gemini ${label} failed:`, err.message || err);
+    }
+    return { value: null, usedAi: false };
+  }
+}
+
+function hasStudyNotes(notes) {
+  return Boolean(notes && Array.isArray(notes.bullets) && notes.bullets.length);
+}
+
 const app = express();
 const upload = multer({ dest: getUploadsRoot() });
 app.use(cors());
@@ -1135,6 +1156,7 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
   const canFlashcardsFromFile = generate.flashcards && files.length === 1 && !text && !audioOnly;
   let notes = null;
   let sourceText = text;
+  let usedAi = false;
   const inputType = urlMeta ? 'url' : audioOnly ? 'audio' : (text && !files.length) ? 'text' : 'files';
   const audioUrl = audioOnly && files[0]?.filename ? `/uploads/${files[0].filename}` : null;
 
@@ -1143,14 +1165,17 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     || (generate.flashcards && files.length > 0 && !canFlashcardsFromFile);
 
   if (shouldReadMaterial) {
+    let notesResult;
     if (audioOnly) {
-      notes = await tryGemini(() => gemini.generateNotesFromAudio(files[0]));
+      notesResult = await tryGeminiStudy(() => gemini.generateNotesFromAudio(files[0]), 'notes-audio');
     } else if (files.length) {
-      notes = await tryGemini(() => gemini.generateNotes({ text, files }));
+      notesResult = await tryGeminiStudy(() => gemini.generateNotes({ text, files }), 'notes-files');
     } else {
-      notes = await tryGemini(() => gemini.generateNotes({ text }));
+      notesResult = await tryGeminiStudy(() => gemini.generateNotes({ text }), 'notes-text');
     }
-    if (!notes) notes = mockStudyNotes(text, files);
+    notes = notesResult.value;
+    usedAi = usedAi || notesResult.usedAi;
+    if (!hasStudyNotes(notes)) notes = mockStudyNotes(text, files);
     notes = urlMeta ? enrichStudyNotesFromUrl(notes, urlMeta) : enrichStudyNotes(notes, text, files);
     sourceText = [...(notes.bullets || []), text].filter(Boolean).join('\n');
   } else if (text) {
@@ -1163,25 +1188,34 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
       bullets: [],
       source: urlMeta?.source || text.substring(0, 160) || files.map((f) => f.originalname).join(', ')
     };
+  } else if (!hasStudyNotes(notes)) {
+    notes = mockStudyNotes(text, files);
+    notes = urlMeta ? enrichStudyNotesFromUrl(notes, urlMeta) : enrichStudyNotes(notes, text, files);
+    sourceText = [...(notes.bullets || []), text].filter(Boolean).join('\n');
   }
 
   let flashcards = [];
   if (generate.flashcards) {
+    let cardsResult;
     if (files.length === 1 && !text && !audioOnly) {
-      flashcards = await tryGemini(() => gemini.generateFlashcardsFromFile(files[0])) || [];
+      cardsResult = await tryGeminiStudy(() => gemini.generateFlashcardsFromFile(files[0]), 'flashcards-file');
     } else {
-      flashcards = await tryGemini(() => gemini.generateFlashcardsFromText(sourceText)) || [];
+      cardsResult = await tryGeminiStudy(() => gemini.generateFlashcardsFromText(sourceText), 'flashcards-text');
     }
+    flashcards = cardsResult.value || [];
+    usedAi = usedAi || cardsResult.usedAi;
     if (!flashcards.length) flashcards = mockStudyFlashcards(sourceText);
   }
 
   let podcast = null;
   if (generate.podcast) {
-    podcast = await tryGemini(() => gemini.generatePodcast({
+    const podcastResult = await tryGeminiStudy(() => gemini.generatePodcast({
       text: sourceText,
       title: notes.title || 'Study podcast',
       style: 'conversational'
-    }));
+    }), 'podcast');
+    podcast = podcastResult.value;
+    usedAi = usedAi || podcastResult.usedAi;
 
     if (!podcast) {
       podcast = {
@@ -1203,14 +1237,17 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
       };
     }
 
-    if (podcast?.script?.length) {
+    // Podcast TTS is slow on serverless; load audio later via /api/podcast/audio.
+    if (podcast?.script?.length && !process.env.VERCEL) {
       try {
-        const audio = await tryGemini(() => gemini.generatePodcastAudio(podcast));
+        const audioResult = await tryGeminiStudy(() => gemini.generatePodcastAudio(podcast), 'podcast-audio');
+        const audio = audioResult.value;
+        usedAi = usedAi || audioResult.usedAi;
         if (audio?.audioBase64) {
-          const audioUrl = savePodcastAudioFile(audio.audioBase64);
+          const streamUrl = savePodcastAudioFile(audio.audioBase64);
           podcast.audio = clientAudioPayload({
             mimeType: audio.mimeType,
-            audioUrl,
+            audioUrl: streamUrl,
             audioBase64: audio.audioBase64,
             hosts: audio.hosts,
             voices: audio.voices
@@ -1222,6 +1259,8 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     }
   }
 
+  const aiConfigured = gemini.isGeminiEnabled();
+
   return {
     type: 'study',
     notes,
@@ -1232,7 +1271,10 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     inputType,
     inputText: (text || sourceText || '').slice(0, 50000),
     audioUrl,
-    generate
+    generate,
+    aiConfigured,
+    aiUsed: usedAi,
+    usedMockFallback: !usedAi && (generate.notes || generate.flashcards || generate.podcast)
   };
 }
 

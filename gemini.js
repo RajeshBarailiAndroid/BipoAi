@@ -304,6 +304,24 @@ async function generateSolveText(problem) {
   });
 }
 
+function parseModelJson(text) {
+  const raw = (text || '').trim();
+  if (!raw) throw new Error('Gemini returned empty JSON');
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch {
+        /* fall through */
+      }
+    }
+    throw new Error('Gemini returned invalid JSON');
+  }
+}
+
 async function generateJSON(model, prompt, extraParts = []) {
   const ai = getAI();
   const response = await ai.models.generateContent({
@@ -314,7 +332,7 @@ async function generateJSON(model, prompt, extraParts = []) {
       temperature: 0.4
     }
   });
-  return JSON.parse(response.text);
+  return parseModelJson(response.text);
 }
 
 function mimeFromFile(file) {
