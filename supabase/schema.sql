@@ -25,6 +25,9 @@ create table if not exists study_sessions (
   card_count integer not null default 0,
   quiz_count integer not null default 0,
   tutor_done boolean not null default false,
+  input_type text not null default 'files',
+  input_text text,
+  audio_url text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -58,3 +61,8 @@ create index if not exists idx_decks_owner_updated
 
 create index if not exists idx_profiles_email
   on profiles (email);
+
+-- If tables already exist, run in SQL Editor:
+-- alter table study_sessions add column if not exists input_type text not null default 'files';
+-- alter table study_sessions add column if not exists input_text text;
+-- alter table study_sessions add column if not exists audio_url text;

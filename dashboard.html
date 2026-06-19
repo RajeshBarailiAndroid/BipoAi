@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>BipoAi — My Study Sessions</title>
+    <title>BipoAi — Ai Study +</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css?v=openai-tint" />
   </head>
   <body class="app-layout app-layout-mg" data-page="dashboard">
-    <aside class="app-sidebar mg-sidebar" aria-label="Dashboard navigation">
+    <aside class="app-sidebar mg-sidebar" aria-label="Ai Study + navigation">
       <div class="app-sidebar-top">
         <a class="app-sidebar-brand" href="index.html">
           <span class="app-sidebar-logo">B</span>
@@ -18,12 +18,12 @@
         </a>
       </div>
 
-      <a class="mg-sidebar-cta button button-primary" href="study.html">
+      <button type="button" class="mg-sidebar-cta button button-primary" data-dash-session-open="materials">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-        Start free session
-      </a>
+        New session
+      </button>
 
-      <nav class="app-sidebar-nav" aria-label="Dashboard sections">
+      <nav class="app-sidebar-nav" aria-label="Ai Study + sections">
         <a class="app-sidebar-link is-active" href="#dashboard-overview" data-sidebar-section="dashboard-overview">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           Overview
@@ -40,10 +40,6 @@
 
       <p class="app-sidebar-nav-label">Upload</p>
       <nav class="app-sidebar-nav" aria-label="Upload options">
-        <button type="button" class="app-sidebar-link" data-dash-session-open="doc">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
-          Upload doc
-        </button>
         <button type="button" class="app-sidebar-link" data-dash-session-open="audio">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           Upload audio
@@ -65,9 +61,9 @@
       <div class="app-sidebar-divider" aria-hidden="true"></div>
 
       <nav class="app-sidebar-nav app-sidebar-nav-secondary" aria-label="App links">
-        <a class="app-sidebar-link" href="study.html">
+        <a class="app-sidebar-link is-active" href="dashboard.html">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-          AI Study +
+          Ai Study +
         </a>
         <a class="app-sidebar-link" href="index.html">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
@@ -91,12 +87,12 @@
         <div class="mg-dash-panel" data-dash-panel="overview">
         <header class="mg-dash-hero" id="dashboard-overview">
           <div class="mg-dash-hero-copy">
-            <p class="mg-dash-greeting" id="dashboard-greeting">Welcome back</p>
+            <p class="mg-dash-greeting" id="dashboard-greeting">Welcome to Ai Study +</p>
             <h1>Track your progress for every study session</h1>
             <p>Pick up where you left off — notes, flashcards, quizzes, podcast, and AI tutor in one place.</p>
           </div>
           <div class="mg-dash-hero-actions">
-            <a class="button button-primary button-lg mg-dash-cta" href="study.html">Start my free study session</a>
+            <button type="button" class="button button-primary button-lg mg-dash-cta" data-dash-session-open="materials">New study session</button>
           </div>
         </header>
 
@@ -131,11 +127,6 @@
         </section>
 
         <section class="mg-dash-quick" aria-label="Quick actions">
-          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="doc">
-            <span class="mg-quick-icon" aria-hidden="true">📄</span>
-            <strong>Upload doc</strong>
-            <span>PDF, Word, PowerPoint, or text</span>
-          </button>
           <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="audio">
             <span class="mg-quick-icon" aria-hidden="true">🎧</span>
             <strong>Upload audio</strong>
@@ -176,7 +167,7 @@
               </div>
               <p>One session per lecture, chapter, or exam topic</p>
             </div>
-            <a class="button button-soft button-sm" href="study.html">+ New session</a>
+            <button type="button" class="button button-soft button-sm" data-dash-session-open="materials">+ New session</button>
           </header>
           <div id="recent-sessions" class="mg-session-list"></div>
         </section>
@@ -224,6 +215,47 @@
             <div id="solver-result" class="study-solver-result" hidden></div>
           </div>
         </section>
+
+        <div class="study-below study-dash-workspace" id="study-workspace" hidden>
+          <section id="study-results" class="study-results-card product-card" hidden>
+            <div class="study-results-header">
+              <div>
+                <div class="study-success-banner" id="study-success-banner">
+                  <span class="study-success-icon" aria-hidden="true">✓</span>
+                  <p>Upload successful — your study session is ready.</p>
+                </div>
+                <h2 id="study-results-title" class="study-results-heading">Study session</h2>
+                <p id="study-results-meta" class="study-result-meta"></p>
+              </div>
+              <div class="study-results-actions">
+                <button type="button" class="button button-soft button-sm" id="study-new-session-btn">New session</button>
+                <button type="button" class="button button-outline button-sm" id="study-delete-session-btn" hidden title="Delete this session">Delete</button>
+              </div>
+            </div>
+
+            <div class="session-progress-card" id="session-progress">
+              <p class="session-progress-label">Generated for you</p>
+              <div class="session-checklist" id="session-reading-list">
+                <button type="button" class="session-check-item" data-goto="notes" hidden><span class="check-icon">○</span> Notes</button>
+                <button type="button" class="session-check-item" data-goto="flashcards" hidden><span class="check-icon">○</span> Flashcards</button>
+                <button type="button" class="session-check-item" data-goto="quiz" hidden><span class="check-icon">○</span> Quiz</button>
+                <button type="button" class="session-check-item" data-goto="podcast" hidden><span class="check-icon">○</span> Podcast</button>
+              </div>
+            </div>
+
+            <div class="study-tabs study-tabs-scroll" id="study-reading-tabs" role="tablist">
+              <button type="button" class="study-tab" data-tab="notes" hidden>Notes</button>
+              <button type="button" class="study-tab" data-tab="flashcards" hidden>Flashcards</button>
+              <button type="button" class="study-tab" data-tab="quiz" hidden>Quiz</button>
+              <button type="button" class="study-tab" data-tab="podcast" hidden>Podcast</button>
+            </div>
+
+            <div id="study-tab-notes" class="study-tab-panel study-result" hidden></div>
+            <div id="study-tab-flashcards" class="study-tab-panel" hidden></div>
+            <div id="study-tab-quiz" class="study-tab-panel" hidden></div>
+            <div id="study-tab-podcast" class="study-tab-panel" hidden></div>
+          </section>
+        </div>
       </main>
     </div>
 
@@ -242,7 +274,7 @@
         </div>
         <div class="study-modal-body dash-session-modal-body">
           <label class="study-field study-field-compact">
-            <span class="study-field-label">Session name</span>
+            <span class="study-field-label study-field-label-muted">Session name</span>
             <input type="text" id="dash-session-name" class="study-session-name" placeholder="e.g. Biology — Chapter 5" maxlength="80" />
           </label>
 
@@ -316,13 +348,13 @@
           </div>
 
           <button type="button" class="button button-primary button-lg study-create-btn" id="dash-generate-btn">
-            Start my free study session
+            Generate session
           </button>
           <p id="dash-generate-status" class="study-status-msg" hidden></p>
         </div>
       </div>
     </div>
 
-    <script src="script.js"></script>
+    <script src="script.js?v=11"></script>
   </body>
 </html>

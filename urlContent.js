@@ -45,6 +45,11 @@ function getYoutubeVideoId(url) {
   return null;
 }
 
+function detectUrlType(rawUrl) {
+  const url = assertPublicHttpUrl(normalizeUrl(rawUrl));
+  return getYoutubeVideoId(url) ? 'youtube' : 'website';
+}
+
 function decodeHtmlEntities(text) {
   return String(text || '')
     .replace(/&amp;/g, '&')
@@ -60,10 +65,38 @@ function htmlToPlainText(html) {
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
+      .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+      .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+      .replace(/<header[\s\S]*?<\/header>/gi, ' ')
+      .replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
   );
+}
+
+function extractMetaContent(html, name) {
+  const patterns = [
+    new RegExp(`<meta[^>]+(?:property|name)=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i'),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${name}["']`, 'i')
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) return htmlToPlainText(match[1]);
+  }
+  return '';
+}
+
+function extractArticleHtml(html) {
+  const candidates = [
+    html.match(/<article[^>]*>([\s\S]*?)<\/article>/i)?.[1],
+    html.match(/<main[^>]*>([\s\S]*?)<\/main>/i)?.[1],
+    html.match(/<div[^>]+role=["']main["'][^>]*>([\s\S]*?)<\/div>/i)?.[1],
+    html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1]
+  ].filter((block) => block && block.length > 120);
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates[0] || html;
 }
 
 const BROWSER_HEADERS = {
@@ -251,10 +284,19 @@ async function extractWebsiteStudyText(rawUrl) {
   }
 
   const titleMatch = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const title = titleMatch ? htmlToPlainText(titleMatch[1]) : new URL(url).hostname;
-  const text = htmlToPlainText(body);
+  const ogTitle = extractMetaContent(body, 'og:title');
+  const title = ogTitle || (titleMatch ? htmlToPlainText(titleMatch[1]) : new URL(url).hostname);
+  const description = extractMetaContent(body, 'og:description')
+    || extractMetaContent(body, 'description');
+  const articleText = htmlToPlainText(extractArticleHtml(body));
+  const textParts = [
+    description && description.length > 40 ? `Summary: ${description}` : '',
+    articleText
+  ].filter(Boolean);
+  const text = textParts.join('\n\n').trim();
+
   if (text.length < 80) {
-    throw new Error('Could not extract enough text from that page.');
+    throw new Error('Could not extract enough text from that page. Try a direct article link.');
   }
 
   return {
@@ -266,13 +308,15 @@ async function extractWebsiteStudyText(rawUrl) {
 }
 
 async function extractUrlStudyText(url, urlType) {
-  if (urlType === 'youtube') return extractYoutubeStudyText(url);
-  if (urlType === 'website') return extractWebsiteStudyText(url);
+  const type = urlType || detectUrlType(url);
+  if (type === 'youtube') return extractYoutubeStudyText(url);
+  if (type === 'website') return extractWebsiteStudyText(url);
   throw new Error('Unsupported link type.');
 }
 
 module.exports = {
   normalizeUrl,
+  detectUrlType,
   extractUrlStudyText,
   extractYoutubeStudyText,
   extractWebsiteStudyText

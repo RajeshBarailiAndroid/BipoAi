@@ -123,6 +123,9 @@ function mapSessionRow(row) {
     id: row.id,
     name: row.name,
     source: row.source || '',
+    inputType: row.input_type || 'files',
+    inputText: row.input_text || '',
+    audioUrl: row.audio_url || '',
     notes: row.notes || null,
     quiz: row.quiz || null,
     flashcards: row.flashcards || [],
@@ -134,6 +137,15 @@ function mapSessionRow(row) {
     createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now()
   };
+}
+
+function slimPodcastForDb(podcast) {
+  if (!podcast || typeof podcast !== 'object') return podcast || null;
+  const clone = JSON.parse(JSON.stringify(podcast));
+  if (clone.audio?.audioBase64 && clone.audio?.audioUrl) {
+    delete clone.audio.audioBase64;
+  }
+  return clone;
 }
 
 function mapFolderRow(row) {
@@ -190,11 +202,14 @@ async function upsertStudySession(ownerId, session) {
     owner_id: ownerId,
     name: session.name || 'Study session',
     source: session.source || '',
+    input_type: session.inputType || 'files',
+    input_text: (session.inputText || '').slice(0, 50000),
+    audio_url: session.audioUrl || null,
     notes: session.notes || null,
     quiz: session.quiz || null,
     flashcards: session.flashcards || [],
-    podcast: session.podcast || null,
-    source_text: (session.sourceText || '').slice(0, 50000),
+    podcast: slimPodcastForDb(session.podcast),
+    source_text: (session.sourceText || session.inputText || '').slice(0, 50000),
     card_count: session.cardCount || (session.flashcards?.length ?? 0),
     quiz_count: session.quizCount || (session.quiz?.questions?.length ?? 0),
     tutor_done: Boolean(session.tutorDone),

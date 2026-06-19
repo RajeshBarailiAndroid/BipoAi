@@ -85,6 +85,22 @@ function slimStudySessionForStorage(payload, { aggressive = false } = {}) {
   return clone;
 }
 
+function slimSessionForDb(session) {
+  const clone = JSON.parse(JSON.stringify(session));
+  const audio = clone.podcast?.audio;
+  if (audio?.audioBase64 && audio?.audioUrl) delete audio.audioBase64;
+  if (clone.inputText?.length > 50000) clone.inputText = clone.inputText.slice(0, 50000);
+  if (clone.sourceText?.length > 50000) clone.sourceText = clone.sourceText.slice(0, 50000);
+  return clone;
+}
+
+function inputTypeFromMode(mode) {
+  if (mode === 'audio') return 'audio';
+  if (mode === 'url') return 'url';
+  if (mode === 'text') return 'text';
+  return 'files';
+}
+
 function setPendingStudy(payload) {
   const attempts = [
     () => slimStudySessionForStorage(payload),
@@ -101,7 +117,7 @@ function setPendingStudy(payload) {
     }
   }
   throw new Error(
-    'This study session is too large to open from the dashboard. Open Study and generate there, or turn off podcast for very large uploads.'
+    'This study session is too large to open in Ai Study +. Try again with podcast turned off, or use a smaller upload.'
   );
 }
 
@@ -147,6 +163,23 @@ function getGuestId() {
   return id;
 }
 
+function getStorageOwnerId() {
+  const user = getCurrentUser();
+  if (user?.id) return String(user.id);
+  return getGuestId();
+}
+
+function userDataKey(kind) {
+  return `bipai.${getStorageOwnerId()}.${kind}`;
+}
+
+function resetUserDataCache() {
+  _dataReady = false;
+  _sessionsCache = null;
+  _decksCache = null;
+  _foldersCache = null;
+}
+
 function authApiHeaders(json = true) {
   const headers = {};
   if (json) headers['Content-Type'] = 'application/json';
@@ -178,9 +211,9 @@ async function checkDatabase() {
 
 async function refreshAllData() {
   if (!(await checkDatabase())) {
-    try { _sessionsCache = JSON.parse(localStorage.getItem('bipai.sessions') || '[]'); } catch { _sessionsCache = []; }
-    try { _decksCache = JSON.parse(localStorage.getItem('bipai.decks') || '[]'); } catch { _decksCache = []; }
-    try { _foldersCache = JSON.parse(localStorage.getItem('bipai.folders') || '[]'); } catch { _foldersCache = []; }
+    try { _sessionsCache = JSON.parse(localStorage.getItem(userDataKey('sessions')) || '[]'); } catch { _sessionsCache = []; }
+    try { _decksCache = JSON.parse(localStorage.getItem(userDataKey('decks')) || '[]'); } catch { _decksCache = []; }
+    try { _foldersCache = JSON.parse(localStorage.getItem(userDataKey('folders')) || '[]'); } catch { _foldersCache = []; }
     _dataReady = true;
     return;
   }
@@ -643,6 +676,56 @@ function validateGenerateOptions(generate) {
   return generate;
 }
 
+function humanizeSessionFilename(name) {
+  return String(name || '')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function resolveSessionTitle(userName, data, mode, sourceFiles = []) {
+  const given = String(userName || '').trim();
+  if (given) return given.slice(0, 80);
+  if (data?.sessionName) return String(data.sessionName).slice(0, 80);
+
+  const { notes = {} } = data || {};
+
+  if (mode === 'url' && notes.title) {
+    const title = notes.title.trim();
+    if (title && title !== 'Study session') return title.slice(0, 80);
+  }
+
+  if (mode === 'files' && sourceFiles.length === 1) {
+    const name = humanizeSessionFilename(sourceFiles[0].name);
+    if (name) return name.slice(0, 80);
+  }
+  if (mode === 'files' && sourceFiles.length > 1) {
+    const first = humanizeSessionFilename(sourceFiles[0].name);
+    return (first ? `${first} + ${sourceFiles.length - 1} more` : `${sourceFiles.length} files`).slice(0, 80);
+  }
+
+  if (mode === 'audio' && sourceFiles[0]?.name) {
+    const name = humanizeSessionFilename(sourceFiles[0].name);
+    if (name && !/^recording[-\s]?\d+$/i.test(name)) return name.slice(0, 80);
+    return 'Lecture recording';
+  }
+
+  if (mode === 'text' && data?.sourceText) {
+    const line = data.sourceText.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+    if (line) return line.slice(0, 80);
+    return 'Pasted notes';
+  }
+
+  const noteTitle = String(notes.title || '').trim();
+  if (noteTitle && noteTitle !== 'Study session') {
+    return noteTitle.replace(/^Smart notes from\s+/i, '').slice(0, 80);
+  }
+  if (notes.source) return String(notes.source).slice(0, 80);
+
+  return `Study session — ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+}
+
 function loadingMessagesForGenerate(generate, activeMode = 'files') {
   const msgs = [];
   if (activeMode === 'audio') msgs.push('Transcribing your audio…');
@@ -654,7 +737,7 @@ function loadingMessagesForGenerate(generate, activeMode = 'files') {
   return msgs.length ? msgs : ['Working on your session…'];
 }
 
-async function createStudySession({ files = [], text = '', url = '', urlType = '', generate = null }) {
+async function createStudySession({ files = [], text = '', url = '', urlType = '', sessionName = '', generate = null }) {
   const gen = generate || { notes: true, flashcards: true, podcast: true };
 
   if (url) {
@@ -664,8 +747,13 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
     try {
       const res = await fetch('/api/study/url', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, urlType, generate: gen }),
+        headers: authApiHeaders(true),
+        body: JSON.stringify({
+          url,
+          ...(urlType ? { urlType } : {}),
+          ...(sessionName ? { sessionName } : {}),
+          generate: gen
+        }),
         signal: controller.signal
       });
       return parseApiResponse(res);
@@ -682,6 +770,7 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
   const fd = new FormData();
   files.forEach((file) => fd.append('files', file));
   if (text) fd.append('text', text);
+  if (sessionName) fd.append('sessionName', sessionName);
   fd.append('generate', JSON.stringify(gen));
 
   const controller = new AbortController();
@@ -689,7 +778,12 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch('/api/study', { method: 'POST', body: fd, signal: controller.signal });
+    const res = await fetch('/api/study', {
+      method: 'POST',
+      headers: authApiHeaders(false),
+      body: fd,
+      signal: controller.signal
+    });
     return parseApiResponse(res);
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -726,6 +820,12 @@ function setCurrentUser(user, token) {
 function clearCurrentUser() {
   localStorage.removeItem('bipai.user');
   localStorage.removeItem('bipai.token');
+}
+
+async function signOutUser() {
+  clearCurrentUser();
+  resetUserDataCache();
+  await refreshAllData();
 }
 
 async function signIn(email, password) {
@@ -855,9 +955,9 @@ function updateNavAuth() {
       signOutBtn.className = 'app-sidebar-signout';
       signOutBtn.setAttribute('aria-label', 'Sign out');
       signOutBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>';
-      signOutBtn.addEventListener('click', (event) => {
+      signOutBtn.addEventListener('click', async (event) => {
         event.stopPropagation();
-        clearCurrentUser();
+        await signOutUser();
         window.location.href = 'index.html';
       });
       actions.appendChild(signOutBtn);
@@ -883,8 +983,8 @@ function updateNavAuth() {
   signOutBtn.type = 'button';
   signOutBtn.className = 'nav-signout';
   signOutBtn.textContent = 'Sign out';
-  signOutBtn.addEventListener('click', () => {
-    clearCurrentUser();
+  signOutBtn.addEventListener('click', async () => {
+    await signOutUser();
     window.location.href = 'index.html';
   });
 
@@ -940,9 +1040,13 @@ function initAppSidebar() {
   });
 
   if (dashPanels.length) {
-    const hashKey = location.hash.replace('#dashboard-', '');
-    const validKeys = dashPanels.map((panel) => panel.dataset.dashPanel);
-    showDashPanel(validKeys.includes(hashKey) ? hashKey : 'overview');
+    const hasSessionView = sessionStorage.getItem(PENDING_STUDY_KEY)
+      || new URLSearchParams(location.search).get('session');
+    if (!hasSessionView) {
+      const hashKey = location.hash.replace('#dashboard-', '');
+      const validKeys = dashPanels.map((panel) => panel.dataset.dashPanel);
+      showDashPanel(validKeys.includes(hashKey) ? hashKey : 'overview');
+    }
   }
 
   const searchInput = sidebar.querySelector('.app-sidebar-search input');
@@ -996,7 +1100,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function getDecks() {
   if (_decksCache) return _decksCache;
   try {
-    const stored = localStorage.getItem('bipai.decks') || localStorage.getItem('laxu.decks') || '[]';
+    const stored = localStorage.getItem(userDataKey('decks')) || localStorage.getItem('bipai.decks') || localStorage.getItem('laxu.decks') || '[]';
     return JSON.parse(stored);
   } catch (e) { return []; }
 }
@@ -1015,7 +1119,8 @@ async function saveDeck(deck) {
   const idx = decks.findIndex((d) => d.id === deck.id);
   if (idx >= 0) decks[idx] = deck;
   else decks.push(deck);
-  localStorage.setItem('bipai.decks', JSON.stringify(decks));
+  localStorage.setItem(userDataKey('decks'), JSON.stringify(decks));
+  localStorage.removeItem('bipai.decks');
   localStorage.removeItem('laxu.decks');
   _decksCache = decks;
   return deck;
@@ -1028,7 +1133,8 @@ async function deleteDeck(id) {
     return;
   }
   const decks = getDecks().filter((d) => d.id !== id);
-  localStorage.setItem('bipai.decks', JSON.stringify(decks));
+  localStorage.setItem(userDataKey('decks'), JSON.stringify(decks));
+  localStorage.removeItem('bipai.decks');
   localStorage.removeItem('laxu.decks');
   _decksCache = decks;
 }
@@ -1036,7 +1142,7 @@ async function deleteDeck(id) {
 function getFolders() {
   if (_foldersCache) return _foldersCache;
   try {
-    return JSON.parse(localStorage.getItem('bipai.folders') || '[]');
+    return JSON.parse(localStorage.getItem(userDataKey('folders')) || localStorage.getItem('bipai.folders') || '[]');
   } catch (e) {
     return [];
   }
@@ -1056,7 +1162,7 @@ async function saveFolder(folder) {
   const idx = folders.findIndex((item) => item.id === folder.id);
   if (idx >= 0) folders[idx] = folder;
   else folders.push(folder);
-  localStorage.setItem('bipai.folders', JSON.stringify(folders));
+  localStorage.setItem(userDataKey('folders'), JSON.stringify(folders));
   _foldersCache = folders;
   return folder;
 }
@@ -1067,35 +1173,87 @@ async function deleteFolder(id) {
     _foldersCache = getFolders().filter((item) => item.id !== id);
     return;
   }
-  localStorage.setItem('bipai.folders', JSON.stringify(getFolders().filter((item) => item.id !== id)));
+  localStorage.setItem(userDataKey('folders'), JSON.stringify(getFolders().filter((item) => item.id !== id)));
   _foldersCache = getFolders();
 }
 
 async function saveStudySessionToDb(session) {
+  const payload = slimSessionForDb(session);
   if (await checkDatabase()) {
-    const { session: saved } = await apiDataFetch('/api/sessions', { method: 'POST', body: JSON.stringify(session) });
-    const list = (_sessionsCache || []).slice();
-    const idx = list.findIndex((s) => s.id === saved.id);
-    if (idx >= 0) list[idx] = saved;
-    else list.unshift(saved);
-    _sessionsCache = list.slice(0, 50);
-    return saved;
+    try {
+      const { session: saved } = await apiDataFetch('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
+      const list = (_sessionsCache || []).slice();
+      const idx = list.findIndex((s) => s.id === saved.id);
+      if (idx >= 0) list[idx] = saved;
+      else list.unshift(saved);
+      _sessionsCache = list.slice(0, 50);
+      return saved;
+    } catch (err) {
+      console.warn('Database session save failed:', err.message);
+    }
   }
-  const key = 'bipai.sessions';
+  const key = userDataKey('sessions');
   const list = JSON.parse(localStorage.getItem(key) || '[]');
-  list.unshift(session);
+  list.unshift(payload);
   localStorage.setItem(key, JSON.stringify(list.slice(0, 20)));
   _sessionsCache = list.slice(0, 20);
-  return session;
+  return payload;
+}
+
+async function deleteStudySessionFromDb(id) {
+  if (await checkDatabase()) {
+    try {
+      await apiDataFetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch (err) {
+      console.warn('Database session delete failed:', err.message);
+      throw err;
+    }
+  }
+  const key = userDataKey('sessions');
+  const list = getStudySessionsFromCache().filter((s) => s.id !== id);
+  localStorage.setItem(key, JSON.stringify(list));
+  _sessionsCache = list;
+}
+
+async function fetchStudySessionById(id) {
+  const cached = getStudySessionsFromCache().find((s) => s.id === id);
+  if (cached) return cached;
+
+  if (!(await checkDatabase())) return null;
+
+  try {
+    const { session } = await apiDataFetch(`/api/sessions/${encodeURIComponent(id)}`);
+    if (!session) return null;
+    const list = (_sessionsCache || []).slice();
+    const idx = list.findIndex((s) => s.id === session.id);
+    if (idx >= 0) list[idx] = session;
+    else list.unshift(session);
+    _sessionsCache = list.slice(0, 50);
+    return session;
+  } catch (err) {
+    console.warn('Session fetch failed:', err.message);
+    return null;
+  }
 }
 
 function getStudySessionsFromCache() {
   if (_sessionsCache) return _sessionsCache;
   try {
-    return JSON.parse(localStorage.getItem('bipai.sessions') || '[]');
+    return JSON.parse(localStorage.getItem(userDataKey('sessions')) || localStorage.getItem('bipai.sessions') || '[]');
   } catch {
     return [];
   }
+}
+
+function upsertSessionCache(session) {
+  const list = getStudySessionsFromCache().slice();
+  const idx = list.findIndex((s) => s.id === session.id);
+  if (idx >= 0) list[idx] = session;
+  else list.unshift(session);
+  _sessionsCache = list.slice(0, 50);
+  try {
+    localStorage.setItem(userDataKey('sessions'), JSON.stringify(_sessionsCache));
+  } catch { /* quota */ }
 }
 
 function escapeDashboardText(text) {
@@ -1248,9 +1406,10 @@ document.addEventListener('DOMContentLoaded', ()=>{
 
   function dashboardGreeting() {
     const h = new Date().getHours();
-    if (h < 12) return 'Good morning';
-    if (h < 17) return 'Good afternoon';
-    return 'Good evening';
+    let timeGreeting = 'Good evening';
+    if (h < 12) timeGreeting = 'Good morning';
+    else if (h < 17) timeGreeting = 'Good afternoon';
+    return `${timeGreeting} — Ai Study +`;
   }
 
   if (greetingEl) greetingEl.textContent = dashboardGreeting();
@@ -1325,7 +1484,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
             <span class="dashboard-empty-icon" aria-hidden="true">📚</span>
             <strong>No study sessions yet</strong>
             <p>Upload a lecture, PDF, or notes to get notes, flashcards, quizzes, podcast, and an AI tutor — all in one session.</p>
-            <a class="button button-primary" href="study.html">Start my free study session</a>
+            <button type="button" class="button button-primary" data-dash-session-open="materials">New study session</button>
           </div>`;
       return;
     }
@@ -1338,7 +1497,12 @@ document.addEventListener('DOMContentLoaded', ()=>{
       <article class="mg-session-row">
         <h3 class="mg-session-title">${escapeDashboardText(session.name)}</h3>
         <time class="mg-session-date" datetime="${date.toISOString()}">${dateLabel}</time>
-        <a class="button button-soft button-sm mg-session-open" href="study.html">Open</a>
+        <div class="mg-session-actions">
+          <a class="button button-soft button-sm mg-session-open" href="dashboard.html?session=${encodeURIComponent(session.id)}">Open</a>
+          <button type="button" class="mg-session-delete" data-session-delete="${escapeDashboardText(session.id)}" aria-label="Delete ${escapeDashboardText(session.name)}" title="Delete session">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+          </button>
+        </div>
       </article>`;
     }).join('');
   }
@@ -1359,7 +1523,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
             <span class="dashboard-empty-icon" aria-hidden="true">🃏</span>
             <strong>No flashcard decks yet</strong>
             <p>Generate flashcards from any upload in AI Study +.</p>
-            <a class="button button-soft button-sm" href="study.html">Create study session</a>
+            <button type="button" class="button button-soft button-sm" data-dash-session-open="materials">Create study session</button>
           </div>`;
       return;
     }
@@ -1464,6 +1628,22 @@ document.addEventListener('DOMContentLoaded', ()=>{
     renderDashboardStats();
   });
 
+  sessionsEl?.addEventListener('click', async (event) => {
+    const deleteBtn = event.target.closest('[data-session-delete]');
+    if (!deleteBtn) return;
+    event.preventDefault();
+    const session = getStudySessions().find((item) => item.id === deleteBtn.dataset.sessionDelete);
+    if (!session) return;
+    if (!confirm(`Delete "${session.name}"? This cannot be undone.`)) return;
+    try {
+      await deleteStudySessionFromDb(session.id);
+      renderSessions();
+      renderDashboardStats();
+    } catch {
+      alert('Could not delete session. Try again.');
+    }
+  });
+
   (async () => {
     await refreshAllData();
     renderDashboardStats();
@@ -1520,16 +1700,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let recordStartTime = 0;
 
   const MODE_CONFIG = {
-    doc: {
-      uploadKind: 'files',
-      panel: 'files',
-      title: 'Upload document',
-      desc: 'PDF, Word, PowerPoint, or text files',
-      icon: '📄',
-      accept: '.pdf,.doc,.docx,.txt,.md,.ppt,.pptx',
-      dropTitle: 'Drop documents or click to upload',
-      dropHint: 'PDF · Word · PowerPoint · Text'
-    },
     materials: {
       uploadKind: 'files',
       panel: 'files',
@@ -1697,7 +1867,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function showLoading(messages) {
     if (!loadingPanel) return;
     loadingPanel.hidden = false;
-    generateBtn.disabled = true;
+    if (generateBtn) generateBtn.disabled = true;
     if (loadingBar) loadingBar.style.width = '12%';
     let i = 0;
     if (loadingText) loadingText.textContent = messages[0] || 'Working…';
@@ -1723,7 +1893,7 @@ document.addEventListener('DOMContentLoaded', () => {
       loadingPanel.hidden = true;
       if (loadingBar) loadingBar.style.width = '0%';
     }, 350);
-    generateBtn.disabled = false;
+    if (generateBtn) generateBtn.disabled = false;
   }
 
   function getAudioFile() {
@@ -1735,8 +1905,11 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
-  openButtons.forEach((btn) => {
-    btn.addEventListener('click', () => openModal(btn.dataset.dashSessionOpen || 'materials'));
+  document.body.addEventListener('click', (event) => {
+    const openBtn = event.target.closest('[data-dash-session-open]');
+    if (!openBtn || openBtn.closest('#dash-session-modal')) return;
+    event.preventDefault();
+    openModal(openBtn.dataset.dashSessionOpen || 'materials');
   });
 
   modal.querySelectorAll('[data-dash-session-close]').forEach((el) => {
@@ -1847,17 +2020,24 @@ document.addEventListener('DOMContentLoaded', () => {
     setStatus('');
 
     try {
-      const data = await createStudySession({ files, text, url, urlType, generate });
-      const { notes = {} } = data;
-      const sessionTitle = sessionNameInput?.value.trim() || notes.title || 'Study session';
-      setPendingStudy({
-        sessionTitle,
-        data,
-        activeMode: activeMode === 'audio' ? 'audio' : activeMode === 'url' ? 'text' : 'files'
+      const data = await createStudySession({
+        files,
+        text,
+        url,
+        urlType,
+        sessionName: sessionNameInput?.value.trim() || '',
+        generate
       });
+      const sessionTitle = resolveSessionTitle(sessionNameInput?.value, data, activeMode === 'audio' ? 'audio' : activeMode === 'url' ? 'url' : 'files', files);
       hideLoading();
       closeModal();
-      window.location.href = 'study.html';
+      window.dispatchEvent(new CustomEvent('bipai:study-session-ready', {
+        detail: {
+          sessionTitle,
+          data,
+          activeMode: activeMode === 'audio' ? 'audio' : activeMode === 'url' ? 'url' : 'files'
+        }
+      }));
     } catch (err) {
       hideLoading();
       setStatus(formatApiError(err.message), true);
@@ -1881,7 +2061,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <li role="menuitem" data-action="test" tabindex="0"><a href="#">Test</a></li>
         <li role="separator" style="height:1px;background:rgba(2,6,23,0.06);margin:8px 0"></li>
         <li role="menuitem" tabindex="0"><a href="features.html">All features</a></li>
-        <li role="menuitem" tabindex="0"><a href="study.html">Study</a></li>
+        <li role="menuitem" tabindex="0"><a href="dashboard.html">Ai Study +</a></li>
       </ul>`;
     Object.assign(panel.style,{
       position:'absolute',minWidth:'220px',background:'#fff',borderRadius:'12px',boxShadow:'0 8px 30px rgba(2,6,23,0.12)',padding:'8px',zIndex:9999,display:'none'
@@ -2917,7 +3097,7 @@ function getSignInModalMarkup() {
           <div class="signin-modal-head">
             <p class="eyebrow">Account</p>
             <h2 id="signin-title">Sign in to BipoAi</h2>
-            <p class="signin-modal-desc">Access your study sets, dashboard, and saved progress.</p>
+            <p class="signin-modal-desc">Access your study sets, Ai Study +, and saved progress.</p>
           </div>
 
           <div class="signin-oauth">
@@ -3046,6 +3226,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
     setCurrentUser(data.user, data.token);
+    resetUserDataCache();
     await migrateGuestToUser();
     await refreshAllData();
     showOAuthMessage(
@@ -3417,11 +3598,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-/* Study session: files, audio record/upload, text → full materials */
+/* Study session results: notes, flashcards, quiz, podcast */
 document.addEventListener('DOMContentLoaded', () => {
-  const hub = document.getElementById('study-session');
-  if (!hub) return;
+  const resultsEl = document.getElementById('study-results');
+  if (!resultsEl) return;
 
+  const isDashboard = document.body.dataset.page === 'dashboard';
+  const workspaceEl = document.getElementById('study-workspace');
+  const dashPanels = isDashboard ? Array.from(document.querySelectorAll('[data-dash-panel]')) : [];
+  const hub = document.getElementById('study-session');
   const modeButtons = document.querySelectorAll('.study-session-card .file-type-picker:not(.study-solver-modes) .file-type-btn');
   const modePanels = document.querySelectorAll('.study-mode-panel');
   const sessionNameInput = document.getElementById('session-name');
@@ -3435,9 +3620,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const dropZone = document.getElementById('study-drop-zone');
   const fileListEl = document.getElementById('study-file-list');
   const pasteEl = document.getElementById('study-paste-text');
+  const urlInput = document.getElementById('study-url-input');
   const generateBtn = document.getElementById('study-generate-btn');
   const statusEl = document.getElementById('study-generate-status');
-  const resultsEl = document.getElementById('study-results');
   const resultsTitle = document.getElementById('study-results-title');
   const resultsMeta = document.getElementById('study-results-meta');
   const tabButtons = document.querySelectorAll('#study-results .study-tab');
@@ -3445,12 +3630,13 @@ document.addEventListener('DOMContentLoaded', () => {
     notes: document.getElementById('study-tab-notes'),
     flashcards: document.getElementById('study-tab-flashcards'),
     quiz: document.getElementById('study-tab-quiz'),
-    podcast: document.getElementById('study-tab-podcast'),
-    tutor: document.getElementById('study-tab-tutor')
+    podcast: document.getElementById('study-tab-podcast')
   };
-  const tutorMessages = document.getElementById('tutor-messages');
-  const tutorForm = document.getElementById('tutor-form');
-  const tutorInput = document.getElementById('tutor-input');
+  const newSessionBtn = document.getElementById('study-new-session-btn');
+  const deleteSessionBtn = document.getElementById('study-delete-session-btn');
+  const sessionProgressCard = document.getElementById('session-progress');
+
+  let currentSessionId = null;
 
   const audioFileInput = document.getElementById('audio-file-input');
   const audioFileTrigger = document.getElementById('audio-file-trigger');
@@ -3484,6 +3670,105 @@ document.addEventListener('DOMContentLoaded', () => {
       modePanels.forEach((p) => { p.hidden = p.dataset.modePanel !== activeMode; });
       setStatus('');
     });
+  });
+
+  function showDashOverview() {
+    dashPanels.forEach((panel) => {
+      panel.hidden = panel.dataset.dashPanel !== 'overview';
+    });
+    document.querySelectorAll('[data-sidebar-section]').forEach((item) => {
+      const href = item.getAttribute('href') || '';
+      item.classList.toggle('is-active', href === '#dashboard-overview');
+    });
+  }
+
+  function showResultsOnly() {
+    document.body.classList.add('study-has-session');
+    if (workspaceEl) workspaceEl.hidden = false;
+    resultsEl.hidden = false;
+    if (isDashboard) {
+      dashPanels.forEach((panel) => { panel.hidden = true; });
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function showCreateForm() {
+    document.body.classList.remove('study-has-session');
+    if (workspaceEl) workspaceEl.hidden = true;
+    resultsEl.hidden = true;
+    sessionData = null;
+    currentSessionId = null;
+    if (deleteSessionBtn) deleteSessionBtn.hidden = true;
+    if (isDashboard) {
+      history.replaceState({}, '', 'dashboard.html');
+      showDashOverview();
+    } else {
+      history.replaceState({}, '', 'dashboard.html');
+      hub?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  function syncReadingTabs(flags) {
+    const map = {
+      notes: flags.hasNotes,
+      flashcards: flags.hasFlashcards,
+      quiz: flags.hasQuiz,
+      podcast: flags.hasPodcast
+    };
+    tabButtons.forEach((btn) => {
+      btn.hidden = !map[btn.dataset.tab];
+      btn.classList.remove('is-active');
+    });
+    progressItems.forEach((item) => {
+      const tab = item.dataset.goto;
+      const show = map[tab];
+      item.hidden = !show;
+      if (show) {
+        item.classList.add('is-done');
+        const icon = item.querySelector('.check-icon');
+        if (icon) icon.textContent = '✓';
+      }
+    });
+    if (sessionProgressCard) {
+      sessionProgressCard.hidden = !Object.values(map).some(Boolean);
+    }
+    return map;
+  }
+
+  function firstReadingTab(map) {
+    return ['notes', 'flashcards', 'quiz', 'podcast'].find((tab) => map[tab]) || null;
+  }
+
+  async function loadSavedSessionById(id) {
+    await ensureDataReady();
+    const session = await fetchStudySessionById(id);
+    if (!session) return false;
+    applyGeneratedSession(session.name, {
+      notes: session.notes || {},
+      quiz: session.quiz || {},
+      flashcards: session.flashcards || [],
+      podcast: session.podcast || {},
+      sourceText: session.sourceText || session.inputText || '',
+      inputType: session.inputType,
+      inputText: session.inputText,
+      audioUrl: session.audioUrl,
+      sessionId: session.id
+    }, session.inputType || 'files', { save: false });
+    return true;
+  }
+
+  newSessionBtn?.addEventListener('click', showCreateForm);
+
+  deleteSessionBtn?.addEventListener('click', async () => {
+    if (!currentSessionId) return;
+    const title = resultsTitle?.textContent || 'this session';
+    if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
+    try {
+      await deleteStudySessionFromDb(currentSessionId);
+      showCreateForm();
+    } catch {
+      setStatus('Could not delete session. Try again.', true);
+    }
   });
 
   function setHowStep() { /* progress shown in session checklist */ }
@@ -3527,7 +3812,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function showLoading(messages) {
     if (!loadingPanel) return;
     loadingPanel.hidden = false;
-    generateBtn.disabled = true;
+    if (generateBtn) generateBtn.disabled = true;
     setLoadingProgress(8);
 
     let i = 0;
@@ -3556,10 +3841,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (loadingBar) loadingBar.style.width = '0%';
       loadingSteps.forEach((el) => el.classList.remove('is-active', 'is-done'));
     }, 350);
-    generateBtn.disabled = false;
+    if (generateBtn) generateBtn.disabled = false;
   }
 
   function renderFileList() {
+    if (!fileListEl) return;
     if (!selectedFiles.length) { fileListEl.hidden = true; fileListEl.innerHTML = ''; return; }
     fileListEl.hidden = false;
     fileListEl.innerHTML = selectedFiles.map((file, i) => `
@@ -3812,18 +4098,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function persistStudySession(sessionTitle, data, activeMode) {
     const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = data;
-    await saveStudySessionToDb({
-      id: 'session-' + Date.now(),
+    const inputType = data.inputType || inputTypeFromMode(activeMode);
+    return saveStudySessionToDb({
+      id: data.sessionId || `session-${Date.now()}`,
       name: sessionTitle,
       createdAt: Date.now(),
-      source: notes.source || (activeMode === 'audio' ? 'Audio' : 'Text'),
+      source: notes.source || (activeMode === 'audio' ? 'Audio' : activeMode === 'url' ? 'Web link' : activeMode === 'text' ? 'Text' : 'Files'),
+      inputType,
+      inputText: data.inputText || data.sourceText || '',
+      audioUrl: data.audioUrl || null,
       cardCount: flashcards.length,
       quizCount: quiz.questions?.length || 0,
       notes,
       quiz,
       flashcards,
       podcast,
-      sourceText: data.sourceText || ''
+      sourceText: data.sourceText || data.inputText || ''
     });
   }
 
@@ -3887,24 +4177,13 @@ document.addEventListener('DOMContentLoaded', () => {
     render();
   }
 
-  function renderTutorWelcome() {
-    tutorMessages.innerHTML = `<div class="tutor-message tutor-message-bot"><p>Ask me anything about your material.</p></div>`;
-  }
-
-  function appendTutor(role, text) {
-    const div = document.createElement('div');
-    div.className = `tutor-message tutor-message-${role}`;
-    div.innerHTML = `<p>${esc(text)}</p>`;
-    tutorMessages.appendChild(div);
-    tutorMessages.scrollTop = tutorMessages.scrollHeight;
-  }
-
   function switchTab(id) {
-    tabButtons.forEach((b) => b.classList.toggle('is-active', b.dataset.tab === id));
+    tabButtons.forEach((b) => b.classList.toggle('is-active', b.dataset.tab === id && !b.hidden));
     Object.entries(panels).forEach(([k, p]) => { if (p) p.hidden = k !== id; });
   }
 
   tabButtons.forEach((b) => b.addEventListener('click', () => {
+    if (b.hidden) return;
     switchTab(b.dataset.tab);
     markProgress(b.dataset.tab);
     if (b.dataset.tab === 'podcast' && panels.podcast?._podcastData) {
@@ -3919,23 +4198,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }));
 
-  tutorForm?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = tutorInput?.value.trim();
-    if (!msg) return;
-    appendTutor('user', msg);
-    tutorInput.value = '';
-    markProgress('tutor');
-    appendTutor('bot', 'Thinking…');
-    const thinking = tutorMessages.lastElementChild;
-    try {
-      const data = await sendTutorMessage(msg, sessionData?.sourceText || '');
-      if (thinking) thinking.querySelector('p').textContent = data.reply || 'No response.';
-    } catch (err) {
-      if (thinking) thinking.querySelector('p').textContent = formatApiError(err.message);
-    }
-  });
-
   function getAudioFile() {
     if (uploadedAudioFile) return uploadedAudioFile;
     if (recordedBlob) {
@@ -3945,62 +4207,69 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
-  async function applyGeneratedSession(sessionTitle, data, mode) {
+  async function applyGeneratedSession(sessionTitle, data, mode, { save = true } = {}) {
     sessionData = data;
     const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = data;
     const hasNotes = (notes.bullets || []).length > 0;
     const hasFlashcards = flashcards.length > 0;
     const hasPodcast = Boolean(podcast.title || podcast.script?.length || podcast.audio?.audioUrl);
     const hasQuiz = (quiz.questions || []).length > 0;
+    const readingMap = syncReadingTabs({ hasNotes, hasFlashcards, hasQuiz, hasPodcast });
 
-    resultsEl.hidden = false;
-    const firstTab = hasNotes ? 'notes' : hasFlashcards ? 'flashcards' : hasQuiz ? 'quiz' : hasPodcast ? 'podcast' : 'tutor';
-    switchTab(firstTab);
-    renderTutorWelcome();
-
-    progressItems.forEach((item) => {
-      const tab = item.dataset.goto;
-      const done = (tab === 'notes' && hasNotes)
-        || (tab === 'flashcards' && hasFlashcards)
-        || (tab === 'quiz' && hasQuiz)
-        || (tab === 'podcast' && hasPodcast);
-      item.classList.toggle('is-done', done);
-      const icon = item.querySelector('.check-icon');
-      if (icon) icon.textContent = done ? '✓' : '○';
-    });
-
-    resultsTitle.textContent = sessionTitle;
+    const displayTitle = data.sessionName || sessionTitle;
+    resultsTitle.textContent = displayTitle;
     resultsMeta.textContent = [
-      mode === 'audio' ? 'From lecture audio' : notes.source,
+      mode === 'audio' ? 'From lecture audio' : mode === 'url' ? (notes.source || 'From web link') : notes.source,
       hasFlashcards ? `${flashcards.length} flashcards` : '',
       hasQuiz ? `${quiz.questions.length} quiz questions` : '',
       hasPodcast && podcast.audio?.audioUrl ? 'podcast ready' : hasPodcast ? 'podcast included' : ''
     ].filter(Boolean).join(' · ');
 
     if (hasNotes) renderNotesPanel(notes);
-    else panels.notes.innerHTML = '<p class="study-result-meta">Notes were not generated for this session.</p>';
-
     if (hasFlashcards) {
       renderFlashcardsPanel(flashcards);
-      saveFlashcardsDeck(sessionTitle, flashcards);
-    } else {
-      panels.flashcards.innerHTML = '<p class="study-result-meta">Flashcards were not generated for this session.</p>';
+      if (save) saveFlashcardsDeck(displayTitle, flashcards);
     }
-
     if (hasQuiz) renderQuizPanel(quiz);
-    else panels.quiz.innerHTML = '<p class="study-result-meta">Quiz was not generated for this session.</p>';
-
     if (hasPodcast) renderPodcastResult(panels.podcast, { podcast });
-    else panels.podcast.innerHTML = '<p class="study-result-meta">Podcast was not generated for this session.</p>';
 
-    await persistStudySession(sessionTitle, data, mode);
-    setStatus('Your study session is ready — pick a tab or use the checklist above.');
-    resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const firstTab = firstReadingTab(readingMap);
+    if (firstTab) switchTab(firstTab);
+
+    if (save) {
+      if (data.savedToDatabase && data.sessionId) {
+        currentSessionId = data.sessionId;
+        upsertSessionCache({
+          id: data.sessionId,
+          name: displayTitle,
+          createdAt: Date.now(),
+          source: notes.source || '',
+          inputType: data.inputType || inputTypeFromMode(mode),
+          inputText: data.inputText || data.sourceText || '',
+          audioUrl: data.audioUrl || null,
+          cardCount: flashcards.length,
+          quizCount: quiz.questions?.length || 0,
+          notes,
+          quiz,
+          flashcards,
+          podcast,
+          sourceText: data.sourceText || data.inputText || ''
+        });
+      } else {
+        const saved = await persistStudySession(displayTitle, { ...data, sessionId: data.sessionId }, mode);
+        currentSessionId = saved?.id || data.sessionId || null;
+      }
+    } else {
+      currentSessionId = data.sessionId || null;
+    }
+    if (deleteSessionBtn) deleteSessionBtn.hidden = !currentSessionId;
+    showResultsOnly();
   }
 
   generateBtn?.addEventListener('click', async () => {
     let files = [];
     let text = '';
+    let url = '';
 
     if (activeMode === 'files') {
       files = selectedFiles.slice();
@@ -4009,12 +4278,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const audio = getAudioFile();
       if (!audio) return setStatus('Record or upload audio first.', true);
       files = [audio];
+    } else if (activeMode === 'url') {
+      url = urlInput?.value.trim() || '';
+      if (!url) return setStatus('Paste a web link first.', true);
     } else {
       text = pasteEl?.value.trim() || '';
       if (!text) return setStatus('Paste some text first.', true);
     }
 
-    generateBtn.disabled = true;
     let generate;
     try {
       generate = validateGenerateOptions(readGenerateOptions('study-'));
@@ -4022,16 +4293,28 @@ document.addEventListener('DOMContentLoaded', () => {
       return setStatus(err.message, true);
     }
 
+    if (generateBtn) generateBtn.disabled = true;
     const loadMsgs = loadingMessagesForGenerate(
       generate,
-      activeMode === 'audio' ? 'audio' : 'files'
+      activeMode === 'url' ? 'url' : activeMode === 'audio' ? 'audio' : 'files'
     );
     showLoading(loadMsgs);
     setStatus('');
 
     try {
-      const data = await createStudySession({ files, text, generate });
-      const sessionTitle = sessionNameInput?.value.trim() || data.notes?.title || 'Study session';
+      const data = await createStudySession({
+        files,
+        text,
+        url,
+        sessionName: sessionNameInput?.value.trim() || '',
+        generate
+      });
+      const sessionTitle = resolveSessionTitle(
+        sessionNameInput?.value,
+        data,
+        activeMode === 'url' ? 'url' : activeMode === 'audio' ? 'audio' : activeMode === 'text' ? 'text' : 'files',
+        files
+      );
       await applyGeneratedSession(sessionTitle, data, activeMode);
       hideLoading();
     } catch (err) {
@@ -4039,14 +4322,28 @@ document.addEventListener('DOMContentLoaded', () => {
       setHowStep();
       setStatus(err.message, true);
     } finally {
-      generateBtn.disabled = false;
+      if (generateBtn) generateBtn.disabled = false;
     }
   });
 
   const pending = takePendingStudy();
+  const sessionId = new URLSearchParams(window.location.search).get('session');
+  window.addEventListener('bipai:study-session-ready', async (event) => {
+    const { sessionTitle, data, activeMode: mode } = event.detail || {};
+    if (!data) return;
+    await applyGeneratedSession(sessionTitle, data, mode || 'files');
+  });
   if (pending) {
     const { sessionTitle, data, activeMode: pendingMode } = pending;
     applyGeneratedSession(sessionTitle, data, pendingMode || 'files');
+  } else if (sessionId) {
+    loadSavedSessionById(sessionId).then((found) => {
+      if (!found) {
+        const msg = 'That session could not be found.';
+        if (statusEl) setStatus(msg, true);
+        else alert(msg);
+      }
+    });
   }
 });
 

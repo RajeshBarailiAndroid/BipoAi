@@ -17,8 +17,8 @@ const {
 } = require('./auth');
 const gemini = require('./gemini');
 const supabase = require('./supabase');
-const { requireOwner } = require('./owner');
-const { extractUrlStudyText } = require('./urlContent');
+const { requireOwner, resolveOwnerId } = require('./owner');
+const { extractUrlStudyText, detectUrlType } = require('./urlContent');
 
 async function finalizeAuth(auth) {
   if (!auth?.user?.id || !supabase.isSupabaseConfigured()) {
@@ -64,6 +64,93 @@ function clientAudioPayload(audio) {
   if (audio.audioUrl) out.audioUrl = audio.audioUrl;
   else if (audio.audioBase64) out.audioBase64 = audio.audioBase64;
   return out;
+}
+
+function slimPodcastForDb(podcast) {
+  if (!podcast || typeof podcast !== 'object') return podcast || null;
+  const clone = JSON.parse(JSON.stringify(podcast));
+  if (clone.audio?.audioBase64 && clone.audio?.audioUrl) delete clone.audio.audioBase64;
+  return clone;
+}
+
+function studyInputLabel(inputType, notes, text, files, urlMeta) {
+  if (inputType === 'audio') return notes?.source || files[0]?.originalname || 'Audio lecture';
+  if (inputType === 'text') return notes?.source || 'Pasted text';
+  if (inputType === 'url') return urlMeta?.source || notes?.source || 'Web link';
+  return notes?.source || files.map((f) => f.originalname).filter(Boolean).join(', ') || 'Uploaded files';
+}
+
+function humanizeFilename(name) {
+  return String(name || '')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function resolveSessionName(userName, { notes = {}, files = [], text = '', urlMeta = null, inputType = 'files' } = {}) {
+  const given = String(userName || '').trim();
+  if (given) return given.slice(0, 80);
+
+  if (urlMeta?.title) return String(urlMeta.title).trim().slice(0, 80);
+
+  if (inputType === 'audio' && files[0]?.originalname) {
+    const audioName = humanizeFilename(files[0].originalname);
+    if (audioName && !/^recording[-\s]?\d+$/i.test(audioName)) return audioName.slice(0, 80);
+    return 'Lecture recording';
+  }
+
+  if (files.length === 1) {
+    return humanizeFilename(files[0].originalname).slice(0, 80) || 'Uploaded file';
+  }
+  if (files.length > 1) {
+    const first = humanizeFilename(files[0].originalname);
+    return (first ? `${first} + ${files.length - 1} more` : `${files.length} files`).slice(0, 80);
+  }
+
+  if (text) {
+    const line = text.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+    if (line) return line.slice(0, 80);
+    return 'Pasted notes';
+  }
+
+  const noteTitle = String(notes?.title || '').trim();
+  if (noteTitle && noteTitle !== 'Study session') {
+    return noteTitle.replace(/^Smart notes from\s+/i, '').slice(0, 80);
+  }
+
+  return `Study session — ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+}
+
+async function persistStudySessionForOwner(ownerId, result, meta = {}) {
+  if (!ownerId || !supabase.isSupabaseConfigured()) return null;
+  const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = result;
+  const inputType = meta.inputType || result.inputType || 'files';
+  const inputText = (meta.inputText || result.inputText || result.sourceText || '').slice(0, 50000);
+  const name = resolveSessionName(meta.name, {
+    notes,
+    files: meta.files || [],
+    text: meta.rawText || inputText,
+    urlMeta: meta.urlMeta,
+    inputType
+  });
+  const session = {
+    id: meta.id || `session-${Date.now()}`,
+    name,
+    createdAt: Date.now(),
+    source: meta.source || studyInputLabel(inputType, notes, meta.rawText || '', meta.files || [], meta.urlMeta),
+    inputType,
+    inputText,
+    audioUrl: meta.audioUrl || result.audioUrl || null,
+    cardCount: flashcards.length,
+    quizCount: quiz.questions?.length || 0,
+    notes,
+    quiz,
+    flashcards,
+    podcast: slimPodcastForDb(podcast),
+    sourceText: (result.sourceText || inputText || '').slice(0, 50000)
+  };
+  return supabase.upsertStudySession(ownerId, session);
 }
 
 async function tryGemini(fn) {
@@ -1033,6 +1120,8 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
   const canFlashcardsFromFile = generate.flashcards && files.length === 1 && !text && !audioOnly;
   let notes = null;
   let sourceText = text;
+  const inputType = urlMeta ? 'url' : audioOnly ? 'audio' : (text && !files.length) ? 'text' : 'files';
+  const audioUrl = audioOnly && files[0]?.filename ? `/uploads/${files[0].filename}` : null;
 
   const shouldReadMaterial = generate.notes
     || (generate.podcast && (audioOnly || files.length > 0 || !text))
@@ -1125,6 +1214,9 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     flashcards,
     podcast: podcast || {},
     sourceText: sourceText.slice(0, 8000),
+    inputType,
+    inputText: (text || sourceText || '').slice(0, 50000),
+    audioUrl,
     generate
   };
 }
@@ -1133,6 +1225,7 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
 app.post('/api/study', upload.array('files', 30), async (req, res) => {
   const text = (req.body?.text || '').trim();
   const files = req.files || [];
+  const sessionName = (req.body?.sessionName || '').trim();
 
   if (!text && !files.length) {
     return res.status(400).json({ error: 'Upload a file or paste text.' });
@@ -1144,7 +1237,34 @@ app.post('/api/study', upload.array('files', 30), async (req, res) => {
       files,
       generate: req.body?.generate
     });
-    res.json(result);
+    const resolvedName = resolveSessionName(sessionName, {
+      notes: result.notes,
+      files,
+      text,
+      inputType: result.inputType
+    });
+    const ownerId = resolveOwnerId(req);
+    let savedSession = null;
+    if (ownerId) {
+      try {
+        savedSession = await persistStudySessionForOwner(ownerId, result, {
+          name: resolvedName,
+          rawText: text,
+          files,
+          inputType: result.inputType,
+          inputText: text || result.inputText,
+          audioUrl: result.audioUrl
+        });
+      } catch (err) {
+        console.warn('Study session DB save:', err.message);
+      }
+    }
+    res.json({
+      ...result,
+      sessionName: savedSession?.name || resolvedName,
+      sessionId: savedSession?.id || null,
+      savedToDatabase: Boolean(savedSession)
+    });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Study session generation failed.' });
   }
@@ -1152,16 +1272,19 @@ app.post('/api/study', upload.array('files', 30), async (req, res) => {
 
 app.post('/api/study/url', async (req, res) => {
   const url = (req.body?.url || '').trim();
-  const urlType = (req.body?.urlType || '').trim();
+  let urlType = (req.body?.urlType || '').trim();
+  const sessionName = (req.body?.sessionName || '').trim();
 
   if (!url) {
     return res.status(400).json({ error: 'Paste a link first.' });
   }
-  if (!['youtube', 'website'].includes(urlType)) {
-    return res.status(400).json({ error: 'Unsupported link type.' });
-  }
 
   try {
+    if (!urlType) urlType = detectUrlType(url);
+    if (!['youtube', 'website'].includes(urlType)) {
+      return res.status(400).json({ error: 'Unsupported link type.' });
+    }
+
     const extracted = await extractUrlStudyText(url, urlType);
     const result = await buildStudySession({
       text: extracted.text,
@@ -1169,7 +1292,32 @@ app.post('/api/study/url', async (req, res) => {
       urlMeta: extracted,
       generate: req.body?.generate
     });
-    res.json(result);
+    const resolvedName = resolveSessionName(sessionName, {
+      notes: result.notes,
+      text: extracted.text,
+      urlMeta: extracted,
+      inputType: 'url'
+    });
+    const ownerId = resolveOwnerId(req);
+    let savedSession = null;
+    if (ownerId) {
+      try {
+        savedSession = await persistStudySessionForOwner(ownerId, result, {
+          name: resolvedName,
+          urlMeta: extracted,
+          inputType: 'url',
+          inputText: extracted.text.slice(0, 50000)
+        });
+      } catch (err) {
+        console.warn('Study session DB save:', err.message);
+      }
+    }
+    res.json({
+      ...result,
+      sessionName: savedSession?.name || resolvedName,
+      sessionId: savedSession?.id || null,
+      savedToDatabase: Boolean(savedSession)
+    });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Could not build a study session from that link.' });
   }

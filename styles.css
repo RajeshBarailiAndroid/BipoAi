@@ -5131,6 +5131,110 @@ body.preview-open {
   padding-bottom: 3rem;
 }
 
+.study-form-card .hero-preview-title.study-form-heading {
+  margin: 0.25rem 0 1.25rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--text);
+}
+
+.study-form-card .study-field-label-muted {
+  margin-bottom: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.study-results-heading {
+  margin: 0.2rem 0 0.35rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.study-results-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.study-success-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 10px;
+  background: rgba(16, 163, 127, 0.1);
+  border: 1px solid rgba(16, 163, 127, 0.22);
+}
+
+.study-success-banner p {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #0d7a5f;
+}
+
+.study-success-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.study-results-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+#study-delete-session-btn {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+#study-delete-session-btn:hover {
+  background: rgba(220, 38, 38, 0.06);
+}
+
+body.study-has-session #study-session {
+  display: none;
+}
+
+body.study-has-session[data-page="dashboard"] [data-dash-panel] {
+  display: none !important;
+}
+
+body.study-has-session .study-below,
+body.study-has-session .study-dash-workspace {
+  padding-top: 0;
+}
+
+body.study-has-session .study-dash-workspace {
+  display: block;
+}
+
+.study-dash-workspace[hidden] {
+  display: none !important;
+}
+
+body.study-has-session .study-results-card {
+  max-width: 52rem;
+  margin: 0 auto;
+}
+
 .study-form-card {
   margin-bottom: 0;
   max-height: none;
@@ -5591,6 +5695,38 @@ body[data-page="home"] .section:not(.hero-mg) {
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
+.mg-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mg-session-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.mg-session-delete svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.mg-session-delete:hover {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.35);
+  background: rgba(220, 38, 38, 0.06);
+}
+
 .mg-session-row:hover {
   border-color: rgba(0, 0, 0, 0.22);
   box-shadow: var(--shadow-sm);
@@ -5795,8 +5931,8 @@ body[data-page="home"] .section:not(.hero-mg) {
   .mg-session-row {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      "title open"
-      "date open";
+      "title actions"
+      "date actions";
     row-gap: 0.2rem;
   }
 
@@ -5809,8 +5945,12 @@ body[data-page="home"] .section:not(.hero-mg) {
     grid-area: date;
   }
 
+  .mg-session-actions {
+    grid-area: actions;
+    align-self: center;
+  }
+
   .mg-session-open {
-    grid-area: open;
     align-self: center;
   }
 }
