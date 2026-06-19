@@ -847,8 +847,9 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
     podcast: false
   };
 
-  onProgress?.(params.url ? 'Fetching your link…' : gen.notes ? 'Writing smart notes…' : 'Building flashcards…');
+  onProgress?.(params.url ? 'Fetching your link…' : gen.notes ? 'Writing smart notes…' : 'Building flashcards…', 15);
   const data = await createStudySession({ ...params, generate: stage1Gen });
+  onProgress?.('Notes ready', gen.flashcards || gen.podcast ? 42 : 100);
 
   const emitPartial = (extra = {}) => {
     if (!onPartial) return;
@@ -866,7 +867,7 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
   });
 
   if (gen.flashcards && !stage1Gen.flashcards) {
-    onProgress?.('Building flashcards…');
+    onProgress?.('Building flashcards…', 58);
     try {
       const cardsData = await fetchStudyStage('/api/study/flashcards', {
         sourceText: data.sourceText,
@@ -875,14 +876,16 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
       data.flashcards = cardsData.flashcards || [];
       if (cardsData.usedMockFallback) data.usedMockFallback = true;
       emitPartial({ flashcards: data.flashcards, _pendingFlashcards: false });
+      onProgress?.('Flashcards ready', gen.podcast ? 78 : 100);
     } catch (err) {
       data._flashcardsError = err.message;
       emitPartial({ _pendingFlashcards: false });
+      onProgress?.('Flashcards skipped', gen.podcast ? 78 : 100);
     }
   }
 
   if (gen.podcast) {
-    onProgress?.('Creating podcast script…');
+    onProgress?.('Creating podcast script…', 88);
     try {
       const podData = await fetchStudyStage('/api/podcast', {
         text: data.sourceText || params.text || '',
@@ -891,10 +894,14 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
       });
       data.podcast = podData.podcast || {};
       emitPartial({ podcast: data.podcast, _pendingPodcast: false });
+      onProgress?.('All set!', 100);
     } catch (err) {
       data._podcastError = err.message;
       emitPartial({ _pendingPodcast: false });
+      onProgress?.('All set!', 100);
     }
+  } else {
+    onProgress?.('All set!', 100);
   }
 
   delete data._pendingFlashcards;
@@ -1988,35 +1995,41 @@ document.addEventListener('DOMContentLoaded', () => {
     if (recordReset) recordReset.hidden = true;
   }
 
+  function setDashLoadingProgress(percent) {
+    if (loadingBar) loadingBar.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+  }
+
   function showLoading(messages) {
     if (!loadingPanel) return;
     loadingPanel.hidden = false;
     if (generateBtn) generateBtn.disabled = true;
-    if (loadingBar) loadingBar.style.width = '12%';
+    setDashLoadingProgress(10);
     let i = 0;
     if (loadingText) loadingText.textContent = messages[0] || 'Working…';
+    clearInterval(loadingPanel._msgTimer);
+    clearInterval(loadingPanel._progressTimer);
     loadingPanel._msgTimer = setInterval(() => {
       i = (i + 1) % messages.length;
       if (loadingText) loadingText.textContent = messages[i];
     }, 2800);
-    let progress = 12;
+    let progress = 10;
     loadingPanel._progressTimer = setInterval(() => {
-      if (progress < 92) {
-        progress += progress < 50 ? 2.5 : 1.2;
-        if (loadingBar) loadingBar.style.width = `${progress}%`;
+      if (progress < 38) {
+        progress += 1.2;
+        setDashLoadingProgress(progress);
       }
-    }, 600);
+    }, 700);
   }
 
   function hideLoading() {
     if (!loadingPanel) return;
     clearInterval(loadingPanel._msgTimer);
     clearInterval(loadingPanel._progressTimer);
-    if (loadingBar) loadingBar.style.width = '100%';
+    setDashLoadingProgress(100);
     window.setTimeout(() => {
       loadingPanel.hidden = true;
       if (loadingBar) loadingBar.style.width = '0%';
-    }, 350);
+    }, 450);
     if (generateBtn) generateBtn.disabled = false;
   }
 
@@ -2155,11 +2168,18 @@ document.addEventListener('DOMContentLoaded', () => {
         sessionName: sessionTitleBase,
         generate
       }, {
-        onProgress: (msg) => { if (loadingText) loadingText.textContent = msg; },
+        onProgress: (msg, percent) => {
+          if (loadingText) loadingText.textContent = msg;
+          if (typeof percent === 'number') setDashLoadingProgress(percent);
+        },
         onPartial: (partial) => {
+          if (typeof partial === 'object') setDashLoadingProgress(42);
           if (!opened) {
-            hideLoading();
-            closeModal();
+            setDashLoadingProgress(100);
+            window.setTimeout(() => {
+              hideLoading();
+              closeModal();
+            }, 350);
             opened = true;
           }
           window.dispatchEvent(new CustomEvent('bipai:study-session-ready', {
@@ -3861,30 +3881,47 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function syncReadingTabs(flags) {
-    const map = {
-      notes: flags.hasNotes,
-      flashcards: flags.hasFlashcards,
-      quiz: flags.hasQuiz,
-      podcast: flags.hasPodcast
+    const {
+      hasNotes,
+      hasFlashcards,
+      hasQuiz,
+      hasPodcast,
+      pendingNotes = false,
+      pendingFlashcards = false,
+      pendingPodcast = false
+    } = flags;
+    const visible = {
+      notes: hasNotes || pendingNotes,
+      flashcards: hasFlashcards || pendingFlashcards,
+      quiz: hasQuiz,
+      podcast: hasPodcast || pendingPodcast
+    };
+    const ready = {
+      notes: hasNotes && !pendingNotes,
+      flashcards: hasFlashcards && !pendingFlashcards,
+      quiz: hasQuiz,
+      podcast: hasPodcast && !pendingPodcast
     };
     tabButtons.forEach((btn) => {
-      btn.hidden = !map[btn.dataset.tab];
+      btn.hidden = !visible[btn.dataset.tab];
       btn.classList.remove('is-active');
     });
     progressItems.forEach((item) => {
       const tab = item.dataset.goto;
-      const show = map[tab];
+      const show = visible[tab];
       item.hidden = !show;
+      item.classList.remove('is-done', 'is-pending');
       if (show) {
-        item.classList.add('is-done');
-        const icon = item.querySelector('.check-icon');
-        if (icon) icon.textContent = '✓';
+        if (ready[tab]) item.classList.add('is-done');
+        else item.classList.add('is-pending');
       }
+      const icon = item.querySelector('.check-icon');
+      if (icon) icon.textContent = ready[tab] ? '✓' : show ? '…' : '○';
     });
     if (sessionProgressCard) {
-      sessionProgressCard.hidden = !Object.values(map).some(Boolean);
+      sessionProgressCard.hidden = !Object.values(visible).some(Boolean);
     }
-    return map;
+    return visible;
   }
 
   function firstReadingTab(map) {
@@ -3977,11 +4014,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let progress = 8;
     loadingPanel._progressTimer = setInterval(() => {
-      if (progress < 92) {
-        progress += progress < 50 ? 2.5 : progress < 80 ? 1.2 : 0.4;
+      if (progress < 36) {
+        progress += 1.2;
         setLoadingProgress(progress);
       }
-    }, 600);
+    }, 700);
   }
 
   function hideLoading() {
@@ -4359,6 +4396,28 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
+  function updateAiBanner(data) {
+    const banner = document.getElementById('study-ai-banner');
+    const successBanner = document.getElementById('study-success-banner');
+    if (!banner) return;
+    const needsKey = Boolean(data?.usedMockFallback && !data?.aiConfigured);
+    const aiFailed = Boolean(data?.usedMockFallback && data?.aiConfigured);
+    banner.hidden = !needsKey && !aiFailed;
+    if (needsKey) {
+      banner.textContent = 'Sample content only — add GEMINI_API_KEY in Vercel → Settings → Environment Variables, then redeploy for real notes from your PDF.';
+    } else if (aiFailed) {
+      banner.textContent = 'Gemini could not run — showing sample content. Check your API key on Vercel.';
+    }
+    if (successBanner) {
+      const line = successBanner.querySelector('p');
+      if (line) {
+        line.textContent = needsKey || aiFailed
+          ? 'Session ready with placeholder content.'
+          : 'Upload successful — your study session is ready.';
+      }
+    }
+  }
+
   async function applyGeneratedSession(sessionTitle, data, mode, { save = true, partial = false } = {}) {
     sessionData = { ...(sessionData || {}), ...data };
     const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = sessionData;
@@ -4370,10 +4429,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const hasQuiz = (quiz.questions || []).length > 0;
     const readingMap = syncReadingTabs({
       hasNotes,
-      hasFlashcards: hasFlashcards || pendingFlashcards,
+      hasFlashcards,
       hasQuiz,
-      hasPodcast: hasPodcast || pendingPodcast
+      hasPodcast,
+      pendingFlashcards,
+      pendingPodcast
     });
+    updateAiBanner(sessionData);
 
     const displayTitle = sessionData.sessionName || sessionTitle;
     resultsTitle.textContent = displayTitle;
@@ -4383,11 +4445,6 @@ document.addEventListener('DOMContentLoaded', () => {
       hasQuiz ? `${quiz.questions.length} quiz questions` : '',
       hasPodcast && podcast.audio?.audioUrl ? 'podcast ready' : hasPodcast ? 'podcast included' : pendingPodcast ? 'podcast loading…' : ''
     ].filter(Boolean);
-    if (sessionData.usedMockFallback) {
-      metaParts.push(sessionData.aiConfigured
-        ? 'AI unavailable — showing sample content'
-        : 'Add GEMINI_API_KEY on Vercel for real AI notes');
-    }
     resultsMeta.textContent = metaParts.join(' · ');
 
     if (hasNotes) renderNotesPanel(notes);
@@ -4490,14 +4547,18 @@ document.addEventListener('DOMContentLoaded', () => {
         sessionName: sessionTitleBase,
         generate
       }, {
-        onProgress: (msg) => {
+        onProgress: (msg, percent) => {
           if (loadingText) loadingText.textContent = msg;
-          setLoadingProgress(firstResult ? 72 : 38);
+          if (typeof percent === 'number') setLoadingProgress(percent);
         },
         onPartial: async (partial) => {
           if (!firstResult) {
-            hideLoading();
+            setLoadingProgress(100);
+            window.setTimeout(() => hideLoading(), 400);
             firstResult = true;
+          } else if (typeof partial === 'object') {
+            const pct = partial._pendingPodcast ? 78 : partial._pendingFlashcards ? 42 : 100;
+            setLoadingProgress(pct);
           }
           await applyGeneratedSession(
             resolveSessionTitle(sessionTitleBase, partial, mode, files),

@@ -5019,6 +5019,23 @@ body.preview-open {
   color: #15803d;
 }
 
+.session-check-item.is-pending {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.08);
+  color: #1d4ed8;
+}
+
+.study-ai-banner {
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #92400e;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
 .session-check-item:hover:not(.session-checklist-demo .session-check-item) {
   border-color: var(--accent);
   color: var(--accent);
