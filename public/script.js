@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
   updateNavAuth();
   initAppNav();
   initAppSidebar();
+  if (document.body.dataset.page === 'dashboard') refreshDashboardAiBanner();
 
   const links = document.querySelectorAll('.nav-links a[href^="#"]');
   links.forEach((link) => {
@@ -62,6 +63,28 @@ async function parseApiResponse(res) {
     throw new Error(formatApiError(msg));
   }
   return data;
+}
+
+async function refreshDashboardAiBanner() {
+  const banner = document.getElementById('study-ai-banner');
+  if (!banner || document.body.dataset.page !== 'dashboard') return;
+  try {
+    const status = await fetch('/api/gemini/status').then((r) => r.json());
+    if (status.connected) {
+      banner.hidden = true;
+      return;
+    }
+    banner.hidden = false;
+    if (status.reason === 'no_key') {
+      banner.textContent = 'AI is off on bipoai.com. In Vercel → Settings → Environment Variables, add GEMINI_API_KEY using an AIzaSy… key from aistudio.google.com/apikey, then Redeploy.';
+    } else if (status.reason === 'auth') {
+      banner.textContent = status.message || 'Gemini key rejected. Use an AIzaSy… key from aistudio.google.com/apikey (AQ. keys often do not work).';
+    } else {
+      banner.textContent = status.message || 'Gemini is not connected on this server.';
+    }
+  } catch {
+    /* offline */
+  }
 }
 
 const PENDING_STUDY_KEY = 'bipai.pendingStudy';
@@ -4400,20 +4423,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const banner = document.getElementById('study-ai-banner');
     const successBanner = document.getElementById('study-success-banner');
     if (!banner) return;
-    const needsKey = Boolean(data?.usedMockFallback && !data?.aiConfigured);
-    const aiFailed = Boolean(data?.usedMockFallback && data?.aiConfigured);
-    banner.hidden = !needsKey && !aiFailed;
-    if (needsKey) {
-      banner.textContent = 'Sample content only — add GEMINI_API_KEY in Vercel → Settings → Environment Variables, then redeploy for real notes from your PDF.';
-    } else if (aiFailed) {
+    const showMockWarning = Boolean(data?.usedMockFallback);
+    if (!showMockWarning) {
+      refreshDashboardAiBanner();
+      return;
+    }
+    banner.hidden = false;
+    if (!data?.aiConfigured) {
+      banner.textContent = 'Sample content only — add GEMINI_API_KEY in Vercel (AIzaSy… key from aistudio.google.com/apikey), then redeploy.';
+    } else {
       banner.textContent = 'Gemini could not run — showing sample content. Check your API key on Vercel.';
     }
     if (successBanner) {
       const line = successBanner.querySelector('p');
       if (line) {
-        line.textContent = needsKey || aiFailed
-          ? 'Session ready with placeholder content.'
-          : 'Upload successful — your study session is ready.';
+        line.textContent = 'Session ready with placeholder content.';
       }
     }
   }

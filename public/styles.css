@@ -5036,6 +5036,11 @@ body.preview-open {
   line-height: 1.45;
 }
 
+.mg-dash-ai-banner {
+  margin: 0 0 1rem;
+  max-width: 52rem;
+}
+
 .session-check-item:hover:not(.session-checklist-demo .session-check-item) {
   border-color: var(--accent);
   color: var(--accent);
