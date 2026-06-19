@@ -40,13 +40,13 @@
 
       <p class="app-sidebar-nav-label">Upload</p>
       <nav class="app-sidebar-nav" aria-label="Upload options">
-        <button type="button" class="app-sidebar-link" data-dash-session-open="audio">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-          Upload audio
-        </button>
         <button type="button" class="app-sidebar-link" data-dash-session-open="materials">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
           Upload study materials
+        </button>
+        <button type="button" class="app-sidebar-link" data-dash-session-open="audio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          Upload audio
         </button>
         <button type="button" class="app-sidebar-link" data-dash-session-open="youtube">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-2C18.88 4 12 4 12 4s-6.88 0-8.59.42a2.78 2.78 0 0 0-1.95 2 29 29 0 0 0-.42 3.58 29 29 0 0 0 .42 3.58 2.78 2.78 0 0 0 1.95 2C5.12 20 12 20 12 20s6.88 0 8.59-.42a2.78 2.78 0 0 0 1.95-2 29 29 0 0 0 .42-3.58 29 29 0 0 0-.42-3.58Z"/><path d="m9.75 15.02 5.75-3.27-5.75-3.27v6.54Z"/></svg>
@@ -128,15 +128,15 @@
         </section>
 
         <section class="mg-dash-quick" aria-label="Quick actions">
-          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="audio">
-            <span class="mg-quick-icon" aria-hidden="true">🎧</span>
-            <strong>Upload audio</strong>
-            <span>MP3, M4A, WAV lecture files</span>
-          </button>
           <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="materials">
             <span class="mg-quick-icon" aria-hidden="true">📚</span>
             <strong>Upload study materials</strong>
             <span>PDFs, slides, images, and more</span>
+          </button>
+          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="audio">
+            <span class="mg-quick-icon" aria-hidden="true">🎧</span>
+            <strong>Upload audio</strong>
+            <span>MP3, M4A, WAV lecture files</span>
           </button>
           <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="record">
             <span class="mg-quick-icon" aria-hidden="true">🎙️</span>
@@ -281,36 +281,36 @@
 
           <div class="study-mode-panel" data-dash-mode-panel="files">
             <div class="study-drop-card" id="dash-drop-zone">
-              <input type="file" id="dash-file-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx,.mp3,.m4a,.wav" hidden />
+              <input type="file" id="dash-file-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx" hidden />
               <button type="button" class="study-drop-btn" id="dash-file-trigger">
                 <span class="study-drop-icon">+</span>
-                <span class="study-drop-title" id="dash-drop-title">Drop files or click to upload</span>
-                <span class="study-drop-hint" id="dash-drop-hint">PDF · Word · PowerPoint · Images</span>
+                <span class="study-drop-title" id="dash-drop-title">Drop study materials or click to upload</span>
+                <span class="study-drop-hint" id="dash-drop-hint">PDF · Slides · Images · Text</span>
               </button>
             </div>
             <ul id="dash-file-list" class="study-file-chips" hidden></ul>
-          </div>
 
-          <div class="study-mode-panel" data-dash-mode-panel="audio" hidden>
-            <div class="study-audio-layout" id="dash-audio-layout">
-              <div class="study-audio-box" id="dash-audio-record-box">
-                <h3 class="study-audio-box-title">Record lecture</h3>
-                <div class="study-recorder-ui">
-                  <span class="study-recorder-dot" id="dash-recorder-dot"></span>
-                  <span class="study-recorder-time" id="dash-recorder-time">00:00</span>
-                  <div class="study-recorder-actions">
-                    <button type="button" class="button button-soft" id="dash-record-start">Record</button>
-                    <button type="button" class="button button-outline" id="dash-record-stop" hidden>Stop</button>
-                    <button type="button" class="button button-outline" id="dash-record-reset" hidden>Re-record</button>
+            <div class="study-upload-audio-stack" id="dash-audio-stack">
+              <div class="study-audio-layout" id="dash-audio-layout">
+                <div class="study-audio-box" id="dash-audio-record-box">
+                  <h3 class="study-audio-box-title">Record lecture</h3>
+                  <div class="study-recorder-ui">
+                    <span class="study-recorder-dot" id="dash-recorder-dot"></span>
+                    <span class="study-recorder-time" id="dash-recorder-time">00:00</span>
+                    <div class="study-recorder-actions">
+                      <button type="button" class="button button-soft" id="dash-record-start">Record</button>
+                      <button type="button" class="button button-outline" id="dash-record-stop" hidden>Stop</button>
+                      <button type="button" class="button button-outline" id="dash-record-reset" hidden>Re-record</button>
+                    </div>
+                    <audio id="dash-record-preview" class="study-record-preview" controls hidden></audio>
                   </div>
-                  <audio id="dash-record-preview" class="study-record-preview" controls hidden></audio>
                 </div>
-              </div>
-              <div class="study-audio-box" id="dash-audio-upload-box">
-                <h3 class="study-audio-box-title">Upload audio</h3>
-                <input type="file" id="dash-audio-file-input" accept="audio/*,.mp3,.m4a,.wav" hidden />
-                <button type="button" class="button button-outline study-audio-pick-btn" id="dash-audio-file-trigger">Choose file</button>
-                <p id="dash-audio-file-name" class="study-audio-picked"></p>
+                <div class="study-audio-box" id="dash-audio-upload-box">
+                  <h3 class="study-audio-box-title">Upload audio</h3>
+                  <input type="file" id="dash-audio-file-input" accept="audio/*,.mp3,.m4a,.wav" hidden />
+                  <button type="button" class="button button-outline study-audio-pick-btn" id="dash-audio-file-trigger">Choose file</button>
+                  <p id="dash-audio-file-name" class="study-audio-picked"></p>
+                </div>
               </div>
             </div>
           </div>
@@ -380,7 +380,7 @@
           <ul id="ai-setup-env-list" class="ai-setup-env-list" hidden></ul>
           <p class="ai-setup-terminal">After adding vars, open <a href="/api/env/check" target="_blank" rel="noopener">/api/env/check</a> — each line should show true.</p>
           <div class="ai-setup-actions">
-            <button type="button" class="button button-primary" id="ai-setup-recheck">Check again</button>
+            <button type="button" class="button button-primary" id="ai-setup-recheck">Reconnect API</button>
             <button type="button" class="button button-soft" data-ai-setup-close>Dismiss</button>
           </div>
           <p id="ai-setup-status" class="study-status-msg" hidden></p>
@@ -388,6 +388,6 @@
       </div>
     </div>
 
-    <script src="script.js?v=19"></script>
+    <script src="script.js?v=21"></script>
   </body>
 </html>

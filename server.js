@@ -213,12 +213,11 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use('/uploads', express.static(getUploadsRoot()));
 
-// Gemini connection status
-app.get('/api/gemini/status', async (req, res) => {
+async function buildGeminiStatusResponse() {
   const key = gemini.getApiKey ? gemini.getApiKey() : '';
   const status = await gemini.verifyConnection();
   const db = await supabase.verifyConnection();
-  res.json({
+  return {
     connected: status.ok,
     mode: status.mode || gemini.getAuthMode(),
     reason: status.reason || (status.ok ? 'ok' : 'unknown'),
@@ -230,7 +229,18 @@ app.get('/api/gemini/status', async (req, res) => {
     keyPrefix: key ? key.slice(0, 4) : null,
     vertexConfigured: gemini.useVertexAI ? gemini.useVertexAI() : false,
     database: db
-  });
+  };
+}
+
+// Gemini connection status
+app.get('/api/gemini/status', async (req, res) => {
+  res.json(await buildGeminiStatusResponse());
+});
+
+// Clear cached key state and re-verify Gemini + Supabase
+app.post('/api/gemini/reconnect', async (req, res) => {
+  if (gemini.resetConnection) gemini.resetConnection();
+  res.json(await buildGeminiStatusResponse());
 });
 
 // Supabase database status

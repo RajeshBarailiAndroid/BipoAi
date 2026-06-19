@@ -3744,6 +3744,12 @@ body.preview-open {
   min-height: 130px;
 }
 
+.study-upload-audio-stack {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
 .study-audio-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;

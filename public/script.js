@@ -141,13 +141,16 @@ function initAiSetupModal() {
   recheckBtn?.addEventListener('click', async () => {
     if (statusEl) {
       statusEl.hidden = false;
-      statusEl.textContent = 'Checking…';
+      statusEl.textContent = 'Reconnecting…';
       statusEl.classList.remove('is-error');
     }
     let envCheck = null;
     try {
       envCheck = await fetch('/api/env/check').then((r) => r.json());
       renderEnvChecklist(envCheck);
+    } catch { /* ignore */ }
+    try {
+      await fetch('/api/gemini/reconnect', { method: 'POST' });
     } catch { /* ignore */ }
     const ok = await refreshDashboardAiBanner();
     if (ok) {
@@ -1930,6 +1933,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const dropTitleEl = document.getElementById('dash-drop-title');
   const dropHintEl = document.getElementById('dash-drop-hint');
   const audioLayout = document.getElementById('dash-audio-layout');
+  const audioStack = document.getElementById('dash-audio-stack');
   const audioRecordBox = document.getElementById('dash-audio-record-box');
   const audioUploadBox = document.getElementById('dash-audio-upload-box');
   const youtubeUrlInput = document.getElementById('dash-youtube-url');
@@ -1950,38 +1954,46 @@ document.addEventListener('DOMContentLoaded', () => {
     materials: {
       uploadKind: 'files',
       panel: 'files',
+      audioView: 'upload',
       title: 'Upload study materials',
-      desc: 'PDFs, slides, images, audio, or text for a full study session',
+      desc: 'Add PDFs, slides, or images — or upload audio below',
       icon: '📚',
-      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx,.mp3,.m4a,.wav',
+      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx',
       dropTitle: 'Drop study materials or click to upload',
-      dropHint: 'PDF · Slides · Images · Audio · Text'
+      dropHint: 'PDF · Slides · Images · Text'
     },
     files: {
       uploadKind: 'files',
       panel: 'files',
+      audioView: 'upload',
       title: 'Upload study materials',
-      desc: 'PDFs, slides, images, audio, or text for a full study session',
+      desc: 'Add PDFs, slides, or images — or upload audio below',
       icon: '📚',
-      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx,.mp3,.m4a,.wav',
+      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx',
       dropTitle: 'Drop study materials or click to upload',
-      dropHint: 'PDF · Slides · Images · Audio · Text'
+      dropHint: 'PDF · Slides · Images · Text'
     },
     audio: {
-      uploadKind: 'audio',
-      panel: 'audio',
+      uploadKind: 'files',
+      panel: 'files',
       audioView: 'upload',
       title: 'Upload audio',
-      desc: 'MP3, M4A, WAV, or other lecture recordings',
-      icon: '🎧'
+      desc: 'Add lecture audio below, or attach study materials above',
+      icon: '🎧',
+      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx',
+      dropTitle: 'Drop study materials or click to upload',
+      dropHint: 'PDF · Slides · Images · Text'
     },
     record: {
-      uploadKind: 'audio',
-      panel: 'audio',
+      uploadKind: 'files',
+      panel: 'files',
       audioView: 'record',
       title: 'Record lecture',
-      desc: 'Capture class in real time from your microphone',
-      icon: '🎙️'
+      desc: 'Record below, or attach study materials above',
+      icon: '🎙️',
+      accept: '.pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.ppt,.pptx',
+      dropTitle: 'Drop study materials or click to upload',
+      dropHint: 'PDF · Slides · Images · Text'
     },
     youtube: {
       uploadKind: 'url',
@@ -2031,9 +2043,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (dropHintEl) dropHintEl.textContent = config.dropHint;
     }
 
-    if (config.panel === 'audio') {
+    if (config.panel === 'files') {
       const uploadOnly = config.audioView === 'upload';
       const recordOnly = config.audioView === 'record';
+      if (dropZone) dropZone.hidden = false;
+      if (audioStack) audioStack.hidden = false;
       if (audioRecordBox) audioRecordBox.hidden = uploadOnly;
       if (audioUploadBox) audioUploadBox.hidden = recordOnly;
       audioLayout?.classList.toggle('is-single-column', uploadOnly || recordOnly);
@@ -2247,7 +2261,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (activeMode === 'files') {
       files = selectedFiles.slice();
-      if (!files.length) return setStatus('Add at least one file.', true);
+      const audio = getAudioFile();
+      if (audio) files.push(audio);
+      if (!files.length) return setStatus('Add study materials or audio.', true);
     } else if (activeMode === 'audio') {
       const audio = getAudioFile();
       if (!audio) return setStatus('Record or upload audio first.', true);
@@ -2265,17 +2281,18 @@ document.addEventListener('DOMContentLoaded', () => {
       return setStatus(err.message, true);
     }
 
-    const loadMsgs = loadingMessagesForGenerate(
-      generate,
-      activeMode === 'url' ? 'url' : activeMode === 'audio' ? 'audio' : 'files'
-    );
+    const hasAudioOnly = activeMode === 'files'
+      && !selectedFiles.length
+      && Boolean(getAudioFile());
+    const contentMode = activeMode === 'url' ? 'url' : hasAudioOnly ? 'audio' : 'files';
+    const loadMsgs = loadingMessagesForGenerate(generate, contentMode);
     showLoading(loadMsgs);
     setStatus('');
 
     try {
       let opened = false;
       const sessionTitleBase = sessionNameInput?.value.trim() || '';
-      const mode = activeMode === 'audio' ? 'audio' : activeMode === 'url' ? 'url' : 'files';
+      const mode = contentMode;
       const data = await createStudySessionStaged({
         files,
         text,

@@ -110,6 +110,13 @@ function markUnavailable() {
   geminiAvailable = false;
 }
 
+function resetConnection() {
+  disabledKeys.clear();
+  keyCooldownUntil.clear();
+  apiKeyClients.clear();
+  geminiAvailable = true;
+}
+
 function isAuthError(err) {
   const msg = (err?.message || String(err)).toLowerCase();
   return msg.includes('401')
@@ -773,6 +780,7 @@ module.exports = {
   useVertexAI,
   shouldUseGemini,
   markUnavailable,
+  resetConnection,
   isAuthError,
   isRetryableError,
   authHelpMessage,
