@@ -371,10 +371,11 @@
         </div>
         <div class="study-modal-body">
           <ol class="ai-setup-steps">
-            <li>Get an <strong>AIzaSy…</strong> key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> (AQ. keys usually fail).</li>
-            <li>Vercel → your project → <strong>Settings → Environment Variables</strong></li>
-            <li>Add <code>GEMINI_API_KEY</code> plus <code>SUPABASE_URL</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code>, <code>SUPABASE_ANON_KEY</code>, <code>SESSION_SECRET</code></li>
-            <li><strong>Redeploy</strong> the project</li>
+            <li>In Terminal: <code>cd /Users/rajeshbaraili/Projects/BipAi && npm run vercel:import-file</code></li>
+            <li>Open <a href="https://vercel.com/dashboard" target="_blank" rel="noopener">vercel.com/dashboard</a> → <strong>BipoAi</strong> project</li>
+            <li><strong>Settings → Environment Variables → Import .env</strong> (upload <code>vercel-import.env</code> or paste its contents)</li>
+            <li>Check <strong>Production</strong>, Preview, Development → Save</li>
+            <li><strong>Deployments → Redeploy</strong> (required — saving alone is not enough)</li>
           </ol>
           <ul id="ai-setup-env-list" class="ai-setup-env-list" hidden></ul>
           <p class="ai-setup-terminal">After adding vars, open <a href="/api/env/check" target="_blank" rel="noopener">/api/env/check</a> — each line should show true.</p>
@@ -387,6 +388,6 @@
       </div>
     </div>
 
-    <script src="script.js?v=18"></script>
+    <script src="script.js?v=19"></script>
   </body>
 </html>

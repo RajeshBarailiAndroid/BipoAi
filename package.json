@@ -9,7 +9,8 @@
     "ssl:generate": "bash scripts/generate-ssl.sh",
     "dev": "nodemon server.js",
     "vercel-build": "echo 'No build step'",
-    "vercel:env": "bash scripts/sync-vercel-env.sh"
+    "vercel:env": "bash scripts/sync-vercel-env.sh",
+    "vercel:import-file": "bash scripts/prepare-vercel-import.sh"
   },
   "engines": {
     "node": ">=18"

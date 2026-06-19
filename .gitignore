@@ -2,6 +2,7 @@ node_modules/
 uploads/
 certs/
 .env
+vercel-import.env
 .node-local/
 secrets/
 *-credentials.json
