@@ -7,7 +7,11 @@
     "start": "node server.js",
     "start:https": "HTTPS=true node server.js",
     "ssl:generate": "bash scripts/generate-ssl.sh",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "vercel-build": "echo 'No build step'"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "@google-cloud/text-to-speech": "^6.4.1",

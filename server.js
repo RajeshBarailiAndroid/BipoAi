@@ -40,15 +40,29 @@ async function finalizeAuth(auth) {
   }
 }
 
-const PODCAST_AUDIO_DIR = path.join(__dirname, 'uploads', 'podcasts');
+const PODCAST_AUDIO_DIR = () => path.join(getUploadsRoot(), 'podcasts');
+
+function getUploadsRoot() {
+  const root = process.env.VERCEL
+    ? path.join('/tmp', 'bipoai-uploads')
+    : path.join(__dirname, 'uploads');
+  try {
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(path.join(root, 'podcasts'), { recursive: true });
+  } catch (err) {
+    console.warn('Uploads directory:', err.message);
+  }
+  return root;
+}
 
 function savePodcastAudioFile(audioBase64) {
   if (!audioBase64) return null;
   const wav = Buffer.from(audioBase64, 'base64');
   if (!wav.length) return null;
-  fs.mkdirSync(PODCAST_AUDIO_DIR, { recursive: true });
+  const dir = PODCAST_AUDIO_DIR();
+  fs.mkdirSync(dir, { recursive: true });
   const id = `podcast-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.wav`;
-  const filePath = path.join(PODCAST_AUDIO_DIR, id);
+  const filePath = path.join(dir, id);
   fs.writeFileSync(filePath, wav);
   return `/api/podcast/stream/${id}`;
 }
@@ -173,9 +187,10 @@ async function tryGemini(fn) {
 }
 
 const app = express();
-const upload = multer({ dest: path.join(__dirname, 'uploads/') });
+const upload = multer({ dest: getUploadsRoot() });
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use('/uploads', express.static(getUploadsRoot()));
 
 // Gemini connection status
 app.get('/api/gemini/status', async (req, res) => {
@@ -298,7 +313,7 @@ app.post('/api/audio', upload.single('audio'), async (req, res) => {
 
 // List uploaded files (simple directory listing)
 app.get('/api/uploads', (req, res) => {
-  const dir = path.join(__dirname, 'uploads');
+  const dir = getUploadsRoot();
   fs.readdir(dir, (err, files) => {
     if (err) return res.status(500).json({ error: 'failed' });
     const items = files.map(f => {
@@ -1399,8 +1414,12 @@ async function logStartup(protocol) {
 }
 
 const httpsOptions = resolveHttpsOptions();
-if (httpsOptions) {
-  https.createServer(httpsOptions, app).listen(PORT, HOST, () => logStartup('https'));
-} else {
-  app.listen(PORT, HOST, () => logStartup('http'));
+module.exports = app;
+
+if (!process.env.VERCEL && require.main === module) {
+  if (httpsOptions) {
+    https.createServer(httpsOptions, app).listen(PORT, HOST, () => logStartup('https'));
+  } else {
+    app.listen(PORT, HOST, () => logStartup('http'));
+  }
 }
