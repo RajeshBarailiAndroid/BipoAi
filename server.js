@@ -12,9 +12,16 @@ if (!process.env.VERCEL) {
 
 const {
   verifyGoogleAuthCode,
+  verifyGoogleAuthCodeRedirect,
   verifyGoogleIdToken,
   verifyAppleIdentityToken,
   getPublicAuthConfig,
+  getGoogleOAuthSetup,
+  getGoogleRedirectUri,
+  buildGoogleAuthUrl,
+  verifyOAuthState,
+  createOAuthCompletionToken,
+  verifyOAuthCompletionToken,
   createDemoAuthResponse,
   createSessionToken
 } = require('./auth');
@@ -803,14 +810,90 @@ app.post('/api/auth/signup', async (req, res) => {
 });
 
 app.get('/api/auth/config', (req, res) => {
+  const supabaseUrl = (process.env.SUPABASE_URL || '').trim().replace(/^["']|["']$/g, '').replace(/\/$/, '');
   res.json({
     ...getPublicAuthConfig(req),
+    ...supabase.getPublicOAuthConfig(),
     supabaseAuth: supabase.isSupabaseAuthConfigured(),
-    supabaseStorage: supabase.isSupabaseConfigured()
+    supabaseStorage: supabase.isSupabaseConfigured(),
+    googleOAuthSetup: getGoogleOAuthSetup(req, supabaseUrl)
   });
 });
 
+app.post('/api/auth/supabase/session', async (req, res) => {
+  const accessToken = String(req.body?.access_token || req.body?.accessToken || '').trim();
+  if (!accessToken) {
+    return res.status(400).json({ error: 'Missing Supabase access token.' });
+  }
+  if (!supabase.isSupabaseAuthConfigured()) {
+    return res.status(503).json({ error: 'Supabase Auth is not configured.' });
+  }
+
+  try {
+    const authUser = await supabase.getUserFromAccessToken(accessToken);
+    const user = supabase.mapSupabaseAuthUser(authUser);
+    const auth = await finalizeAuth({
+      type: 'auth',
+      user,
+      token: createSessionToken(user)
+    });
+    return res.json({ ...auth, supabaseAuth: true });
+  } catch (err) {
+    return res.status(401).json({ error: err.message || 'Supabase sign-in failed.' });
+  }
+});
+
 // Sign in with Google (authorization code or ID token from Google Identity Services)
+app.get('/api/auth/google/start', (req, res) => {
+  const config = getPublicAuthConfig(req);
+  if (!config.googleEnabled) {
+    return res.status(503).json({ error: 'Google sign-in is not configured.' });
+  }
+  try {
+    res.redirect(buildGoogleAuthUrl(req, req.query.next));
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Google sign-in could not start.' });
+  }
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+  const oauthError = String(req.query.error || '').trim();
+  if (oauthError) {
+    return res.redirect(`/auth-callback.html?error=${encodeURIComponent(oauthError)}`);
+  }
+
+  const stateData = verifyOAuthState(req.query.state);
+  if (!stateData) {
+    return res.redirect('/auth-callback.html?error=invalid_state');
+  }
+  if (!req.query.code) {
+    return res.redirect('/auth-callback.html?error=missing_code');
+  }
+
+  try {
+    const redirectUri = getGoogleRedirectUri(req);
+    const auth = await verifyGoogleAuthCodeRedirect(String(req.query.code), redirectUri);
+    const finalized = await finalizeAuth(auth);
+    const completion = createOAuthCompletionToken(finalized);
+    const next = encodeURIComponent(stateData.next);
+    res.redirect(`/auth-callback.html?completion=${encodeURIComponent(completion)}&next=${next}`);
+  } catch (err) {
+    res.redirect(`/auth-callback.html?error=${encodeURIComponent(err.message || 'google_signin_failed')}`);
+  }
+});
+
+app.post('/api/auth/oauth/complete', (req, res) => {
+  const completion = String(req.body?.completion || '').trim();
+  if (!completion) {
+    return res.status(400).json({ error: 'Missing completion token.' });
+  }
+  try {
+    res.json(verifyOAuthCompletionToken(completion));
+  } catch (err) {
+    res.status(401).json({ error: err.message || 'Sign-in completion failed.' });
+  }
+});
+
 app.post('/api/auth/google', async (req, res) => {
   try {
     const { code, idToken } = req.body || {};

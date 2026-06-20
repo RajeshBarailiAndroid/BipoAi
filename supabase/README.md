@@ -31,12 +31,47 @@ Find these under **Project Settings → API**.
 2. Turn **Email** on
 3. For local testing, you can disable **Confirm email** (otherwise users must click the confirmation link before signing in)
 
-## 5. Enable Google & Apple in Supabase (optional)
-BipoAi verifies Google/Apple tokens on your server, then saves profiles to Supabase.
+## 5. Enable Google & Apple OAuth (recommended)
 
-You can also enable providers in **Authentication → Providers** for future Supabase Auth flows:
-- **Google** — use the same `GOOGLE_CLIENT_ID` / secret from Google Cloud
-- **Apple** — use your Apple Services ID
+When `SUPABASE_URL` and `SUPABASE_ANON_KEY` are set, BipoAi uses **Supabase Auth** for Google and Apple sign-in.
+
+### Supabase dashboard
+
+1. **Authentication → URL Configuration**
+   - **Site URL:** `https://www.bipoai.com` (or `http://localhost:3001` for local dev)
+   - **Redirect URLs:** add both:
+     - `http://localhost:3001/auth-callback.html`
+     - `https://www.bipoai.com/auth-callback.html`
+
+2. **Authentication → Providers → Google**
+   - Enable Google
+   - Use the same **Client ID** and **Client secret** from Google Cloud Console
+
+3. **Authentication → Providers → Apple** (optional)
+   - Enable Apple and add your Apple Services ID credentials
+
+### Google Cloud Console
+
+For Supabase Google provider, authorized redirect URI must include your Supabase callback:
+
+```
+https://YOUR_PROJECT.supabase.co/auth/v1/callback
+```
+
+Find `YOUR_PROJECT` in your Supabase URL (`https://xxxx.supabase.co`).
+
+Also add JavaScript origins for local/production app URLs.
+
+### How OAuth works in BipoAi
+
+1. User clicks a saved Google/Apple account or **Use another account**
+2. Browser redirects through Supabase to the provider
+3. Provider returns to `auth-callback.html`
+4. Server verifies the Supabase session and saves the profile to `profiles`
+
+### Fallback (no Supabase OAuth)
+
+If only `GOOGLE_CLIENT_ID` / `APPLE_CLIENT_ID` are set (without Supabase anon key), BipoAi falls back to direct Google/Apple popup verification on your server.
 
 ## 6. Restart the server
 ```bash
@@ -49,6 +84,7 @@ Check connection:
 
 ## How sign-in works
 1. **Email** — Supabase Auth verifies password; profile saved to `profiles`
-2. **Google** or **Apple** — server verifies OAuth token, then saves profile to Supabase
-3. Study sessions, decks, and folders are stored under the user's `owner_id`
-4. Guest data (before sign-in) is migrated on login automatically
+2. **Google / Apple** — Supabase OAuth when `SUPABASE_ANON_KEY` is set; otherwise direct token verification on your server
+3. Saved account lists open the real provider sign-in (not demo mode)
+4. Study sessions, decks, and folders are stored under the user's `owner_id`
+5. Guest data (before sign-in) is migrated on login automatically

@@ -1177,6 +1177,43 @@ async function fetchAuthConfig() {
   return res.json();
 }
 
+async function loadSupabaseJs() {
+  if (window.supabase?.createClient) return;
+  await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js');
+}
+
+async function startSupabaseOAuth(provider) {
+  const config = await fetchAuthConfig();
+  if (!config.useSupabaseOAuth || !config.supabaseUrl || !config.supabaseAnonKey) {
+    throw new Error('Supabase sign-in is not configured.');
+  }
+  await loadSupabaseJs();
+  const client = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    auth: {
+      flowType: 'pkce',
+      persistSession: true,
+      detectSessionInUrl: false,
+      storageKey: 'bipai.supabase.auth'
+    }
+  });
+  const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const redirectTo = `${window.location.origin}/auth-callback.html?next=${encodeURIComponent(next || '/dashboard.html')}`;
+  const { error } = await client.auth.signInWithOAuth({
+    provider,
+    options: { redirectTo }
+  });
+  if (error) throw error;
+}
+
+async function signInWithSupabaseSession(accessToken) {
+  const res = await fetch('/api/auth/supabase/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ access_token: accessToken })
+  });
+  return parseApiResponse(res);
+}
+
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     const existing = document.querySelector(`script[src="${src}"]`);
@@ -1373,7 +1410,7 @@ function downloadAnki() {
 }
 
 // Expose for simple testing in browser console
-window.bipai = { uploadFile, uploadAudio, uploadNotesFile, uploadNotesFiles, detectFileType, fileTypeLabel, generateNotesFromText, generateQuizFromText, generatePodcast, solveProblem, createStudySession, createStudySessionStaged, sendTutorMessage, signIn, signUp, signInWithProvider, fetchAuthConfig, getCurrentUser, clearCurrentUser, downloadAnki, getFolders, saveFolder, deleteFolder, getDecks, saveDeck, deleteDeck };
+window.bipai = { uploadFile, uploadAudio, uploadNotesFile, uploadNotesFiles, detectFileType, fileTypeLabel, generateNotesFromText, generateQuizFromText, generatePodcast, solveProblem, createStudySession, createStudySessionStaged, sendTutorMessage, signIn, signUp, signInWithProvider, signInWithSupabaseSession, startSupabaseOAuth, fetchAuthConfig, getCurrentUser, clearCurrentUser, downloadAnki, getFolders, saveFolder, deleteFolder, getDecks, saveDeck, deleteDeck };
 
 // Simple UI binding if upload elements exist
 document.addEventListener('DOMContentLoaded', () => {
@@ -3517,59 +3554,17 @@ function getSignInModalMarkup() {
           </div>
 
           <div class="signin-oauth">
-            <div class="oauth-provider-block">
-              <button type="button" class="oauth-btn oauth-google button-soft" id="signin-google" aria-expanded="false" aria-controls="google-account-panel">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-                Continue with Google
-              </button>
-              <div id="google-account-panel" class="provider-account-panel provider-google" hidden>
-                <p class="provider-account-label">Choose a Google account</p>
-                <div id="google-account-list" class="provider-account-list"></div>
-                <button type="button" class="provider-account-add" data-provider="google">Use another Google account</button>
-              </div>
-            </div>
-
-            <div class="oauth-provider-block">
-              <button type="button" class="oauth-btn oauth-apple button-soft" id="signin-apple" aria-expanded="false" aria-controls="apple-account-panel">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.365 1.43c0 1.14-.417 2.087-1.25 2.84-.898.812-1.966 1.21-3.115 1.137-.045-1.098.417-2.11 1.242-2.886.884-.84 2.03-1.31 3.123-1.091zm3.08 16.64c-.735 1.68-1.08 2.43-2.02 3.92-1.31 2.01-3.16 4.52-5.45 4.54-1.02.01-1.75-.67-3.26-.67-1.52 0-2.06.65-3.17.68-2.28.08-4.02-2.18-5.33-4.18-2.92-4.47-3.24-9.71-1.43-12.49 1.27-1.84 3.28-2.93 5.16-2.93 1.21 0 2.22.67 3.35.67 1.1 0 1.78-.67 3.36-.67 1.2 0 2.47.65 3.74 1.78-3.29 1.8-2.76 6.48.53 7.97z"/></svg>
-                Continue with Apple
-              </button>
-              <div id="apple-account-panel" class="provider-account-panel provider-apple" hidden>
-                <p class="provider-account-label">Choose an Apple account</p>
-                <div id="apple-account-list" class="provider-account-list"></div>
-                <button type="button" class="provider-account-add" data-provider="apple">Use another Apple ID</button>
-              </div>
-            </div>
+            <button type="button" class="oauth-btn oauth-google button-soft" id="signin-google">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+              Continue with Google
+            </button>
+            <button type="button" class="oauth-btn oauth-apple button-soft" id="signin-apple">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.365 1.43c0 1.14-.417 2.087-1.25 2.84-.898.812-1.966 1.21-3.115 1.137-.045-1.098.417-2.11 1.242-2.886.884-.84 2.03-1.31 3.123-1.091zm3.08 16.64c-.735 1.68-1.08 2.43-2.02 3.92-1.31 2.01-3.16 4.52-5.45 4.54-1.02.01-1.75-.67-3.26-.67-1.52 0-2.06.65-3.17.68-2.28.08-4.02-2.18-5.33-4.18-2.92-4.47-3.24-9.71-1.43-12.49 1.27-1.84 3.28-2.93 5.16-2.93 1.21 0 2.22.67 3.35.67 1.1 0 1.78-.67 3.36-.67 1.2 0 2.47.65 3.74 1.78-3.29 1.8-2.76 6.48.53 7.97z"/></svg>
+              Continue with Apple
+            </button>
           </div>
           <p id="signin-oauth-result" class="signin-oauth-result" hidden></p>
           <p id="signin-oauth-note" class="signin-oauth-note" hidden></p>
-
-          <div class="signin-divider"><span>or continue with email</span></div>
-
-          <form id="signin-form" class="form-grid" novalidate>
-            <label id="signin-name-field" style="display:none">
-              Full name
-              <input name="name" placeholder="Your name" />
-            </label>
-            <label>
-              Email
-              <input name="email" type="email" required placeholder="you@domain.com" />
-            </label>
-            <label>
-              Password
-              <input name="password" type="password" required placeholder="Enter your password" minlength="6" />
-            </label>
-
-            <div class="signin-actions">
-              <button type="submit" class="button button-soft" id="signin-submit">Sign in</button>
-              <div id="signin-result" style="color:var(--muted)"></div>
-            </div>
-          </form>
-
-          <p class="signin-switch">
-            <span id="signin-switch-text">Don't have an account?</span>
-            <button type="button" class="signin-toggle" id="signin-toggle">Create one</button>
-          </p>
         </div>
       </div>
     </div>`;
@@ -3587,7 +3582,7 @@ function openSignInModal() {
   modal.hidden = false;
   modal.setAttribute('aria-hidden', 'false');
   document.body.classList.add('modal-open');
-  document.getElementById('signin-form')?.email?.focus();
+  document.getElementById('signin-google')?.focus();
 }
 
 function closeSignInModal() {
@@ -3596,10 +3591,6 @@ function closeSignInModal() {
   modal.hidden = true;
   modal.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('modal-open');
-  document.getElementById('google-account-panel') && (document.getElementById('google-account-panel').hidden = true);
-  document.getElementById('apple-account-panel') && (document.getElementById('apple-account-panel').hidden = true);
-  document.getElementById('signin-google')?.setAttribute('aria-expanded', 'false');
-  document.getElementById('signin-apple')?.setAttribute('aria-expanded', 'false');
   if (location.hash === '#signin') {
     history.replaceState({}, '', location.pathname + location.search);
   }
@@ -3607,40 +3598,37 @@ function closeSignInModal() {
 
 document.addEventListener('DOMContentLoaded', () => {
   ensureSignInModal();
-  const form = document.getElementById('signin-form');
-  if (!form || form.dataset.bound) return;
-  form.dataset.bound = 'true';
-
-  let mode = 'signin';
   const modal = document.getElementById('signin-modal');
-  const title = document.getElementById('signin-title');
-  const submitBtn = document.getElementById('signin-submit');
-  const toggleBtn = document.getElementById('signin-toggle');
-  const switchText = document.getElementById('signin-switch-text');
-  const nameField = document.getElementById('signin-name-field');
-  const result = document.getElementById('signin-result');
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = 'true';
+
   const googleBtn = document.getElementById('signin-google');
   const appleBtn = document.getElementById('signin-apple');
   const oauthNote = document.getElementById('signin-oauth-note');
   const oauthResult = document.getElementById('signin-oauth-result');
+  let appleReady = false;
+  let oauthConfig = null;
 
   function showOAuthMessage(message, state = 'info') {
-    if (!oauthResult) {
-      result.textContent = message;
-      return;
-    }
+    if (!oauthResult) return;
     oauthResult.hidden = !message;
     oauthResult.textContent = message || '';
     oauthResult.dataset.state = state;
   }
 
+  function formatGoogleOAuthError(error) {
+    const msg = String(error?.message || error || '');
+    if (!/origin_mismatch|invalid_client|redirect_uri_mismatch|no registered origin/i.test(msg)) return msg;
+    const redirectUri = oauthConfig?.googleOAuthSetup?.primaryRedirectUri || 'https://bipoai.com/api/auth/google/callback';
+    return [
+      'Google OAuth is not configured for this site yet.',
+      'In Google Cloud Console → APIs & Services → Credentials, open your Web application OAuth client (same Client ID as in .env) and add this Authorized redirect URI:',
+      redirectUri,
+      'Save, wait a few minutes, then try again.'
+    ].join('\n\n');
+  }
+
   async function completeAuth(data) {
-    if (data?.user?.provider && data.user.email) {
-      saveProviderAccount(data.user.provider, {
-        email: data.user.email,
-        name: data.user.name || data.user.email
-      });
-    }
     setCurrentUser(data.user, data.token);
     resetUserDataCache();
     await migrateGuestToUser();
@@ -3653,277 +3641,65 @@ document.addEventListener('DOMContentLoaded', () => {
     updateNavAuth();
   }
 
-  const defaultAccounts = {
-    google: [
-      { email: 'student@gmail.com', name: 'Student Gmail' },
-      { email: 'study.bipai@gmail.com', name: 'BipoAi Study' },
-      { email: 'workspace@gmail.com', name: 'Work Gmail' }
-    ],
-    apple: [
-      { email: 'student@icloud.com', name: 'Student iCloud' },
-      { email: 'study@privaterelay.appleid.com', name: 'Hide My Email' },
-      { email: 'family@icloud.com', name: 'Family Apple ID' }
-    ]
-  };
-
-  function getSavedProviderAccounts(provider) {
-    try {
-      return JSON.parse(localStorage.getItem(`bipai.accounts.${provider}`) || '[]');
-    } catch (e) {
-      return [];
+  async function startGoogleSignIn() {
+    const origin = window.location.origin;
+    if (/127\.0\.0\.1|192\.168\.|10\.\d+\.|172\.(1[6-9]|2\d|3[01])\./.test(origin)) {
+      throw new Error(`Google sign-in does not work on ${origin}. Open http://localhost:3001 and try again.`);
     }
+    if (oauthConfig?.useSupabaseOAuth) {
+      showOAuthMessage('Redirecting to Google...', 'info');
+      await startSupabaseOAuth('google');
+      return;
+    }
+    if (!oauthConfig?.googleEnabled) {
+      throw new Error('Google sign-in is not configured.');
+    }
+    const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    window.location.href = `/api/auth/google/start?next=${encodeURIComponent(next || '/dashboard.html')}`;
   }
 
-  function saveProviderAccount(provider, account) {
-    const saved = getSavedProviderAccounts(provider).filter((item) => item.email !== account.email);
-    saved.unshift(account);
-    localStorage.setItem(`bipai.accounts.${provider}`, JSON.stringify(saved.slice(0, 5)));
-  }
-
-  function mergeAccounts(provider) {
-    const seen = new Set();
-    return [...getSavedProviderAccounts(provider), ...defaultAccounts[provider]].filter((account) => {
-      if (seen.has(account.email)) return false;
-      seen.add(account.email);
-      return true;
-    });
-  }
-
-  function getInitials(name) {
-    return (name || '?')
-      .split(' ')
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() || '')
-      .join('') || '?';
-  }
-
-  const googlePanel = document.getElementById('google-account-panel');
-  const applePanel = document.getElementById('apple-account-panel');
-  const googleList = document.getElementById('google-account-list');
-  const appleList = document.getElementById('apple-account-list');
-  let googleCodeClient = null;
-  let appleReady = false;
-
-  function closeAllProviderPanels() {
-    if (googlePanel) googlePanel.hidden = true;
-    if (applePanel) applePanel.hidden = true;
-    googleBtn?.setAttribute('aria-expanded', 'false');
-    appleBtn?.setAttribute('aria-expanded', 'false');
-  }
-
-  function openProviderPanel(provider) {
-    const panel = provider === 'google' ? googlePanel : applePanel;
-    const button = provider === 'google' ? googleBtn : appleBtn;
-    const otherPanel = provider === 'google' ? applePanel : googlePanel;
-    const otherButton = provider === 'google' ? appleBtn : googleBtn;
-
-    if (!panel || !button) return;
-
-    if (otherPanel) otherPanel.hidden = true;
-    otherButton?.setAttribute('aria-expanded', 'false');
-    panel.hidden = false;
-    button.setAttribute('aria-expanded', 'true');
-  }
-
-  function toggleProviderPanel(provider) {
-    const panel = provider === 'google' ? googlePanel : applePanel;
-    if (!panel) return;
-    if (panel.hidden) openProviderPanel(provider);
-    else closeAllProviderPanels();
-  }
-
-  function renderProviderAccounts(provider, listEl, onSelect) {
-    if (!listEl) return;
-
-    const accounts = mergeAccounts(provider);
-    listEl.innerHTML = accounts.map((account) => `
-      <button type="button" class="account-option" data-email="${account.email}">
-        <span class="account-avatar ${provider}">${getInitials(account.name)}</span>
-        <span>
-          <strong>${account.name}</strong>
-          <span>${account.email}</span>
-        </span>
-      </button>
-    `).join('');
-
-    listEl.querySelectorAll('.account-option').forEach((button) => {
-      button.addEventListener('click', async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const account = accounts.find((item) => item.email === button.dataset.email);
-        if (!account) return;
-        button.disabled = true;
-        try {
-          await onSelect(account);
-        } finally {
-          button.disabled = false;
-        }
-      });
-    });
-  }
-
-  async function signInWithDemoAccount(provider, account) {
-    showOAuthMessage(`Signing in as ${account.email}...`, 'info');
-    const data = await signInWithDemo(provider, account);
+  async function startAppleSignIn() {
+    if (oauthConfig?.useSupabaseOAuth) {
+      showOAuthMessage('Redirecting to Apple...', 'info');
+      await startSupabaseOAuth('apple');
+      return;
+    }
+    if (!appleReady) {
+      throw new Error('Apple sign-in is not configured.');
+    }
+    showOAuthMessage('Opening Apple sign-in...', 'info');
+    const response = await AppleID.auth.signIn();
+    const idToken = response?.authorization?.id_token;
+    if (!idToken) throw new Error('Apple did not return an identity token.');
+    const appleName = response?.user?.name;
+    const name = appleName
+      ? `${appleName.firstName || ''} ${appleName.lastName || ''}`.trim()
+      : undefined;
+    showOAuthMessage('Signing in with Apple...', 'info');
+    const data = await signInWithProvider('apple', { idToken, name });
     await completeAuth(data);
   }
 
-  async function handleGoogleAccount(account) {
-    closeAllProviderPanels();
-    try {
-      await signInWithDemoAccount('google', account);
-    } catch (err) {
-      showOAuthMessage(err.message, 'error');
-    }
-  }
-
-  async function startGoogleOAuth() {
-    if (!googleCodeClient) {
-      showOAuthMessage('Google OAuth is not configured. Pick an account from the list instead.', 'error');
-      return;
-    }
-
-    showOAuthMessage('Opening Google sign-in...', 'info');
-    googleCodeClient.requestCode();
-  }
-
-  async function handleAppleAccount(account) {
-    closeAllProviderPanels();
-    if (appleReady) {
-      showOAuthMessage(`Continue in Apple as ${account.email}...`, 'info');
-      try {
-        const response = await AppleID.auth.signIn();
-        const idToken = response?.authorization?.id_token;
-        if (!idToken) throw new Error('Apple did not return an identity token.');
-
-        const appleName = response?.user?.name;
-        const name = appleName
-          ? `${appleName.firstName || ''} ${appleName.lastName || ''}`.trim()
-          : account.name;
-
-        showOAuthMessage('Signing in with Apple...', 'info');
-        const data = await signInWithProvider('apple', { idToken, name });
-        await completeAuth(data);
-      } catch (err) {
-        if (err?.error === 'popup_closed_by_user') return;
-        showOAuthMessage(err.message || 'Apple sign-in failed.', 'error');
-      }
-      return;
-    }
-
-    try {
-      await signInWithDemoAccount('apple', account);
-    } catch (err) {
-      showOAuthMessage(err.message, 'error');
-    }
-  }
-
-  async function handleAnotherAccount(provider) {
-    closeAllProviderPanels();
-
-    if (provider === 'google') {
-      if (googleCodeClient) {
-        await startGoogleOAuth();
-        return;
-      }
-
-      const email = prompt('Enter your Google email address:');
-      if (!email) return;
-      const name = email.split('@')[0].replace(/[._-]/g, ' ');
-      try {
-        await signInWithDemoAccount('google', { email, name });
-      } catch (err) {
-        showOAuthMessage(err.message, 'error');
-      }
-      return;
-    }
-
-    if (provider === 'apple' && appleReady) {
-      showOAuthMessage('Choose an account in Apple...', 'info');
-      try {
-        const response = await AppleID.auth.signIn();
-        const idToken = response?.authorization?.id_token;
-        if (!idToken) throw new Error('Apple did not return an identity token.');
-        const appleName = response?.user?.name;
-        const name = appleName
-          ? `${appleName.firstName || ''} ${appleName.lastName || ''}`.trim()
-          : undefined;
-        const data = await signInWithProvider('apple', { idToken, name });
-        await completeAuth(data);
-      } catch (err) {
-        if (err?.error === 'popup_closed_by_user') return;
-        showOAuthMessage(err.message || 'Apple sign-in failed.', 'error');
-      }
-      return;
-    }
-
-    const email = prompt('Enter your Apple ID email address:');
-    if (!email) return;
-    const name = email.split('@')[0].replace(/[._-]/g, ' ');
-    try {
-      await signInWithDemoAccount('apple', { email, name });
-    } catch (err) {
-      showOAuthMessage(err.message, 'error');
-    }
-  }
-
-  renderProviderAccounts('google', googleList, handleGoogleAccount);
-  renderProviderAccounts('apple', appleList, handleAppleAccount);
-
-  googleBtn?.addEventListener('click', () => {
-    showOAuthMessage('');
-    toggleProviderPanel('google');
-  });
-
-  appleBtn?.addEventListener('click', () => {
-    showOAuthMessage('');
-    toggleProviderPanel('apple');
-  });
-
-  document.querySelectorAll('.provider-account-add').forEach((button) => {
-    button.addEventListener('click', () => {
-      handleAnotherAccount(button.dataset.provider);
-    });
-  });
-
   async function initOAuthProviders() {
-    let config = { googleEnabled: false, appleEnabled: false };
+    let config = { googleEnabled: false, appleEnabled: false, useSupabaseOAuth: false };
     try {
       config = await fetchAuthConfig();
+      oauthConfig = config;
     } catch (err) {
       return;
     }
 
-    const notes = [];
+    if (appleBtn) appleBtn.hidden = !(config.appleEnabled || config.useSupabaseOAuth);
 
-    if (config.googleEnabled) {
-      try {
-        await loadScript('https://accounts.google.com/gsi/client');
-        googleCodeClient = google.accounts.oauth2.initCodeClient({
-          client_id: config.googleClientId,
-          scope: 'openid email profile',
-          ux_mode: 'popup',
-          callback: async (response) => {
-            if (response.error) {
-              showOAuthMessage(response.error, 'error');
-              return;
-            }
-            showOAuthMessage('Signing in with Google...', 'info');
-            try {
-              const data = await signInWithProvider('google', { code: response.code });
-              await completeAuth(data);
-            } catch (err) {
-              showOAuthMessage(err.message, 'error');
-            }
-          }
-        });
-      } catch (err) {
-        notes.push('Google popup sign-in could not be initialized.');
-      }
+    const origin = window.location.origin;
+    const usingLocalAlias = /127\.0\.0\.1|192\.168\.|10\.\d+\.|172\.(1[6-9]|2\d|3[01])\./.test(origin);
+    if (oauthNote && usingLocalAlias && config.googleEnabled) {
+      oauthNote.hidden = false;
+      oauthNote.dataset.state = 'error';
+      oauthNote.textContent = `Use http://localhost:3001 for Google sign-in (not ${origin}).`;
     }
 
-    if (config.appleEnabled) {
+    if (!config.useSupabaseOAuth && config.appleEnabled) {
       try {
         await loadScript('https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js');
         AppleID.auth.init({
@@ -3934,62 +3710,34 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         appleReady = true;
       } catch (err) {
-        notes.push('Apple popup sign-in could not be initialized.');
+        showOAuthMessage('Apple sign-in could not be initialized.', 'error');
       }
-    }
-
-    if (notes.length) {
-      oauthNote.hidden = false;
-      oauthNote.textContent = notes.join(' ');
-    } else if (config.supabaseAuth) {
-      oauthNote.hidden = false;
-      oauthNote.textContent = 'Email sign-in is secured with Supabase Auth.';
     }
   }
 
   initOAuthProviders();
 
-  toggleBtn?.addEventListener('click', () => {
-    mode = mode === 'signin' ? 'signup' : 'signin';
-    title.textContent = mode === 'signin' ? 'Sign in to BipoAi' : 'Create your BipoAi account';
-    submitBtn.textContent = mode === 'signin' ? 'Sign in' : 'Create account';
-    switchText.textContent = mode === 'signin' ? "Don't have an account?" : 'Already have an account?';
-    toggleBtn.textContent = mode === 'signin' ? 'Create one' : 'Sign in';
-    nameField.style.display = mode === 'signup' ? 'block' : 'none';
-    result.textContent = '';
-  });
-
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    result.textContent = 'Please wait...';
-
-    const email = form.email.value.trim();
-    const password = form.password.value;
-    const name = form.name?.value.trim();
-
+  googleBtn?.addEventListener('click', async () => {
+    showOAuthMessage('');
     try {
-      const data = mode === 'signin'
-        ? await signIn(email, password)
-        : await signUp(email, password, name);
-
-      if (data.needsEmailConfirmation) {
-        result.textContent = data.message || 'Check your email to confirm your account, then sign in.';
-        mode = 'signin';
-        title.textContent = 'Sign in to BipoAi';
-        submitBtn.textContent = 'Sign in';
-        switchText.textContent = "Don't have an account?";
-        toggleBtn.textContent = 'Create one';
-        nameField.style.display = 'none';
-        return;
-      }
-
-      await completeAuth(data);
+      await startGoogleSignIn();
     } catch (err) {
-      result.textContent = err.message;
+      if (err?.error === 'popup_closed_by_user') return;
+      showOAuthMessage(formatGoogleOAuthError(err) || 'Google sign-in failed.', 'error');
     }
   });
 
-  modal?.querySelectorAll('[data-signin-close]').forEach((el) => {
+  appleBtn?.addEventListener('click', async () => {
+    showOAuthMessage('');
+    try {
+      await startAppleSignIn();
+    } catch (err) {
+      if (err?.error === 'popup_closed_by_user') return;
+      showOAuthMessage(err.message || 'Apple sign-in failed.', 'error');
+    }
+  });
+
+  modal.querySelectorAll('[data-signin-close]').forEach((el) => {
     el.addEventListener('click', closeSignInModal);
   });
 

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BipoAi — Signing in</title>
+    <link rel="stylesheet" href="styles.css?v=openai-tint" />
+    <style>
+      body {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        margin: 0;
+        background: #f8fafc;
+      }
+      .auth-callback-card {
+        width: min(420px, calc(100vw - 2rem));
+        padding: 2rem;
+        border-radius: 1.25rem;
+        background: #fff;
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+        text-align: center;
+      }
+      .auth-callback-card p {
+        margin: 0;
+        color: var(--muted, #64748b);
+        line-height: 1.6;
+        white-space: pre-line;
+      }
+      .auth-callback-card.is-error p {
+        color: #b91c1c;
+      }
+      .auth-callback-card a {
+        display: inline-block;
+        margin-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="auth-callback-card" id="auth-callback-card">
+      <p id="auth-callback-status">Completing sign-in…</p>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+    <script>
+      function formatGoogleSetupError(error, config) {
+        const msg = String(error || '');
+        if (!/origin_mismatch|invalid_client|redirect_uri_mismatch|missing_code|invalid_state/i.test(msg)) {
+          return msg || 'Sign in failed.';
+        }
+        const redirectUri = config?.googleOAuthSetup?.primaryRedirectUri || 'https://bipoai.com/api/auth/google/callback';
+        return [
+          'Google OAuth is not configured for this site yet.',
+          'In Google Cloud Console → APIs & Services → Credentials, open your Web application OAuth client and add this Authorized redirect URI:',
+          redirectUri,
+          'Save, wait a few minutes, then try again.'
+        ].join('\n\n');
+      }
+
+      (async () => {
+        const card = document.getElementById('auth-callback-card');
+        const statusEl = document.getElementById('auth-callback-status');
+        const params = new URLSearchParams(window.location.search);
+        const next = params.get('next') || '/dashboard.html';
+        const error = params.get('error');
+        const completion = params.get('completion');
+
+        try {
+          if (error) {
+            const config = await fetch('/api/auth/config').then((res) => res.ok ? res.json() : {}).catch(() => ({}));
+            throw new Error(formatGoogleSetupError(decodeURIComponent(error), config));
+          }
+
+          if (completion) {
+            const res = await fetch('/api/auth/oauth/complete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ completion })
+            });
+            const payload = await res.json();
+            if (!res.ok) throw new Error(payload.error || 'Sign in failed.');
+
+            localStorage.setItem('bipai.user', JSON.stringify(payload.user));
+            if (payload.token) localStorage.setItem('bipai.token', payload.token);
+            window.location.replace(next);
+            return;
+          }
+
+          const config = await fetch('/api/auth/config').then((res) => {
+            if (!res.ok) throw new Error('Unable to load sign-in configuration.');
+            return res.json();
+          });
+
+          if (!config.useSupabaseOAuth || !config.supabaseUrl || !config.supabaseAnonKey) {
+            throw new Error('Sign-in callback is missing required parameters.');
+          }
+
+          const code = params.get('code');
+          if (!code) {
+            throw new Error('Missing authorization code from the sign-in provider.');
+          }
+
+          const client = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey, {
+            auth: {
+              flowType: 'pkce',
+              persistSession: true,
+              detectSessionInUrl: false,
+              storageKey: 'bipai.supabase.auth'
+            }
+          });
+
+          const { data, error: exchangeError } = await client.auth.exchangeCodeForSession(code);
+          if (exchangeError) throw exchangeError;
+          if (!data?.session?.access_token) throw new Error('Supabase did not return a session.');
+
+          const res = await fetch('/api/auth/supabase/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ access_token: data.session.access_token })
+          });
+          const payload = await res.json();
+          if (!res.ok) throw new Error(payload.error || 'Sign in failed.');
+
+          localStorage.setItem('bipai.user', JSON.stringify(payload.user));
+          if (payload.token) localStorage.setItem('bipai.token', payload.token);
+          window.location.replace(next);
+        } catch (err) {
+          card.classList.add('is-error');
+          statusEl.textContent = err.message || 'Sign in failed.';
+          const link = document.createElement('a');
+          link.href = '/dashboard.html';
+          link.textContent = 'Back to dashboard';
+          card.appendChild(link);
+        }
+      })();
+    </script>
+  </body>
+</html>

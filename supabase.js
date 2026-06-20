@@ -45,16 +45,58 @@ function getAuthClient() {
   return authClient;
 }
 
+function resolveAuthProvider(user) {
+  const identity = (user?.identities || []).find((item) => item?.provider && item.provider !== 'email');
+  return identity?.provider || user?.app_metadata?.provider || 'email';
+}
+
 function mapSupabaseAuthUser(user, fallbackName = '') {
   const meta = user?.user_metadata || {};
   const email = user?.email || '';
+  const provider = resolveAuthProvider(user);
   return {
     id: user.id,
     email,
     name: meta.name || meta.full_name || fallbackName || email.split('@')[0] || 'User',
     picture: meta.avatar_url || meta.picture || null,
-    provider: 'email',
+    provider,
     plan: 'free'
+  };
+}
+
+async function getUserFromAccessToken(accessToken) {
+  const sb = getAuthClient();
+  if (!sb) throw new Error('Supabase Auth is not configured.');
+  const { data, error } = await sb.auth.getUser(accessToken);
+  if (error) throw error;
+  if (!data?.user) throw new Error('Invalid Supabase session.');
+  return data.user;
+}
+
+function cleanEnv(raw) {
+  return (raw || '').trim().replace(/^["']|["']$/g, '');
+}
+
+function isSupabaseOAuthEnabled() {
+  if (!isSupabaseAuthConfigured()) return false;
+  return cleanEnv(process.env.SUPABASE_OAUTH_ENABLED) === 'true';
+}
+
+function getPublicOAuthConfig() {
+  if (!isSupabaseAuthConfigured()) {
+    return {
+      useSupabaseOAuth: false,
+      oauthMode: 'direct',
+      supabaseUrl: '',
+      supabaseAnonKey: ''
+    };
+  }
+  const useSupabaseOAuth = isSupabaseOAuthEnabled();
+  return {
+    useSupabaseOAuth,
+    oauthMode: useSupabaseOAuth ? 'supabase' : 'direct',
+    supabaseUrl: getSupabaseUrl(),
+    supabaseAnonKey: useSupabaseOAuth ? getAnonKey() : ''
   };
 }
 
@@ -394,6 +436,10 @@ async function verifyConnection() {
 module.exports = {
   isSupabaseConfigured,
   isSupabaseAuthConfigured,
+  isSupabaseOAuthEnabled,
+  getPublicOAuthConfig,
+  getUserFromAccessToken,
+  mapSupabaseAuthUser,
   verifyConnection,
   signInWithEmail,
   signUpWithEmail,
