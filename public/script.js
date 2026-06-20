@@ -2021,7 +2021,7 @@ document.addEventListener('DOMContentLoaded', () => {
       panel: 'files',
       inputView: 'materials',
       title: 'Upload study materials',
-      desc: 'Add PDFs, Word docs, images, slides — or paste text',
+      desc: 'Add PDFs, Word docs, images, slides, and sheets',
       icon: '📚',
       dropTitle: 'Drop files or click to upload',
       dropHint: 'PDF · Word · Images · Slides · Sheets · Text files'
@@ -2031,10 +2031,17 @@ document.addEventListener('DOMContentLoaded', () => {
       panel: 'files',
       inputView: 'materials',
       title: 'Upload study materials',
-      desc: 'Add PDFs, Word docs, images, slides — or paste text',
+      desc: 'Add PDFs, Word docs, images, slides, and sheets',
       icon: '📚',
       dropTitle: 'Drop files or click to upload',
       dropHint: 'PDF · Word · Images · Slides · Sheets · Text files'
+    },
+    text: {
+      uploadKind: 'text',
+      panel: 'text',
+      title: 'Paste text',
+      desc: 'Paste notes, a lecture transcript, or chapter text',
+      icon: '📝'
     },
     audio: {
       uploadKind: 'files',
@@ -2355,13 +2362,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let urlType = '';
     const config = MODE_CONFIG[activeVariant] || MODE_CONFIG.materials;
 
-    if (activeMode === 'files') {
+    if (activeMode === 'text') {
+      text = pasteTextInput?.value.trim() || '';
+      if (!text) return setStatus('Paste some text first.', true);
+    } else if (activeMode === 'files') {
       if (activeVariant === 'materials' || activeVariant === 'files') {
         files = selectedFiles.slice();
-        text = pasteTextInput?.value.trim() || '';
-        if (!files.length && !text) {
-          return setStatus('Add files or paste text.', true);
-        }
+        if (!files.length) return setStatus('Add at least one file.', true);
       } else if (activeVariant === 'audio') {
         const audio = getUploadedAudioFile();
         if (!audio) return setStatus('Upload an audio file first.', true);
@@ -2393,11 +2400,8 @@ document.addEventListener('DOMContentLoaded', () => {
       return setStatus(err.message, true);
     }
 
-    const hasTextOnly = (activeVariant === 'materials' || activeVariant === 'files')
-      && !files.length
-      && Boolean(text);
     const hasAudioOnly = activeVariant === 'audio' || activeVariant === 'record';
-    const contentMode = activeMode === 'url' ? 'url' : hasTextOnly ? 'text' : hasAudioOnly ? 'audio' : 'files';
+    const contentMode = activeMode === 'url' ? 'url' : activeMode === 'text' ? 'text' : hasAudioOnly ? 'audio' : 'files';
     const loadMsgs = loadingMessagesForGenerate(generate, contentMode);
     showLoading(loadMsgs);
     setStatus('');

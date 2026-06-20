@@ -1731,32 +1731,6 @@ img {
   background: #ffffff;
 }
 
-.study-notes-tabs {
-  display: inline-flex;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-  padding: 0.35rem;
-  border-radius: 999px;
-  background: #f1f5f9;
-}
-
-.study-notes-tab {
-  border: none;
-  background: transparent;
-  padding: 0.55rem 1rem;
-  border-radius: 999px;
-  font: inherit;
-  font-weight: 600;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.study-notes-tab.is-active {
-  background: #ffffff;
-  color: var(--accent-strong);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
-}
-
 .study-recorder {
   display: grid;
   gap: 1rem;

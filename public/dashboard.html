@@ -44,6 +44,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
           Upload study materials
         </button>
+        <button type="button" class="app-sidebar-link" data-dash-session-open="text">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          Paste text
+        </button>
         <button type="button" class="app-sidebar-link" data-dash-session-open="audio">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           Upload audio
@@ -136,6 +140,11 @@
             <span class="mg-quick-icon" aria-hidden="true">📚</span>
             <strong>Upload study materials</strong>
             <span>PDFs, slides, images, and more</span>
+          </button>
+          <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="text">
+            <span class="mg-quick-icon" aria-hidden="true">📝</span>
+            <strong>Paste text</strong>
+            <span>Notes, transcripts, or chapter text</span>
           </button>
           <button type="button" class="mg-quick-card mg-quick-card-btn" data-dash-session-open="audio">
             <span class="mg-quick-icon" aria-hidden="true">🎧</span>
@@ -288,6 +297,7 @@
 
           <div class="dash-input-tabs" id="dash-input-tabs" role="tablist" aria-label="Input source">
             <button type="button" class="dash-input-tab is-active" data-dash-input="materials" role="tab" aria-selected="true">Materials</button>
+            <button type="button" class="dash-input-tab" data-dash-input="text" role="tab" aria-selected="false">Paste text</button>
             <button type="button" class="dash-input-tab" data-dash-input="record" role="tab" aria-selected="false">Record</button>
             <button type="button" class="dash-input-tab" data-dash-input="audio" role="tab" aria-selected="false">Upload audio</button>
             <button type="button" class="dash-input-tab" data-dash-input="youtube" role="tab" aria-selected="false">YouTube</button>
@@ -305,13 +315,6 @@
                 </button>
               </div>
               <ul id="dash-file-list" class="study-file-chips" hidden></ul>
-
-              <div class="dash-paste-section" id="dash-paste-section">
-                <label class="study-field">
-                  <span class="study-field-label">Or paste text</span>
-                  <textarea id="dash-paste-text" class="study-text-input dash-paste-text" rows="5" placeholder="Paste notes, lecture transcript, or chapter text…"></textarea>
-                </label>
-              </div>
             </div>
 
             <div class="study-upload-audio-stack" id="dash-audio-stack" hidden>
@@ -339,6 +342,14 @@
                 </div>
               </div>
             </div>
+          </div>
+
+          <div class="study-mode-panel" data-dash-mode-panel="text" hidden>
+            <label class="study-field">
+              <span class="study-field-label">Study text</span>
+              <textarea id="dash-paste-text" class="study-text-input dash-paste-text" rows="8" placeholder="Paste notes, lecture transcript, or chapter text…"></textarea>
+            </label>
+            <p class="study-result-meta">We turn pasted text into notes, flashcards, quiz, and podcast.</p>
           </div>
 
           <div class="study-mode-panel" data-dash-mode-panel="youtube" hidden>
@@ -416,6 +427,6 @@
       </div>
     </div>
 
-    <script src="script.js?v=39"></script>
+    <script src="script.js?v=41"></script>
   </body>
 </html>
