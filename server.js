@@ -27,6 +27,8 @@ const {
 } = require('./auth');
 const gemini = require('./gemini');
 const supabase = require('./supabase');
+const msDoc = require('./documentIntelligence');
+const { resolveStudyMaterial } = require('./studyMaterial');
 const { requireOwner, resolveOwnerId } = require('./owner');
 const { extractUrlStudyText, detectUrlType } = require('./urlContent');
 
@@ -149,7 +151,7 @@ function resolveSessionName(userName, { notes = {}, files = [], text = '', urlMe
 
 async function persistStudySessionForOwner(ownerId, result, meta = {}) {
   if (!ownerId || !supabase.isSupabaseConfigured()) return null;
-  const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = result;
+  const { notes = {}, flashcards = [], quiz = {} } = result;
   const inputType = meta.inputType || result.inputType || 'files';
   const inputText = (meta.inputText || result.inputText || result.sourceText || '').slice(0, 50000);
   const name = resolveSessionName(meta.name, {
@@ -170,10 +172,9 @@ async function persistStudySessionForOwner(ownerId, result, meta = {}) {
     cardCount: flashcards.length,
     quizCount: quiz.questions?.length || 0,
     notes,
-    quiz,
     flashcards,
-    podcast: slimPodcastForDb(podcast),
-    sourceText: (result.sourceText || inputText || '').slice(0, 50000)
+    quiz,
+    sourceText: (result.originalText || meta.inputText || result.inputText || '').slice(0, 50000)
   };
   return supabase.upsertStudySession(ownerId, session);
 }
@@ -259,6 +260,11 @@ app.get('/api/db/status', async (req, res) => {
   res.json(await supabase.verifyConnection());
 });
 
+// Azure Document Intelligence status (PDF / Word / image text extraction)
+app.get('/api/document-intelligence/status', async (req, res) => {
+  res.json(await msDoc.verifyConnection());
+});
+
 // Which env vars the server sees (names only — no secret values)
 app.get('/api/env/check', (req, res) => {
   const pick = (name) => Boolean(String(process.env[name] || '').trim());
@@ -312,7 +318,9 @@ app.get('/api/env/check', (req, res) => {
       SUPABASE_ANON_KEY: pick('SUPABASE_ANON_KEY'),
       SESSION_SECRET: pick('SESSION_SECRET'),
       GOOGLE_CLIENT_ID: pick('GOOGLE_CLIENT_ID'),
-      GOOGLE_CLIENT_SECRET: pick('GOOGLE_CLIENT_SECRET')
+      GOOGLE_CLIENT_SECRET: pick('GOOGLE_CLIENT_SECRET'),
+      DOCUMENT_INTELLIGENCE_ENDPOINT: pick('DOCUMENT_INTELLIGENCE_ENDPOINT'),
+      DOCUMENT_INTELLIGENCE_API_KEY: pick('DOCUMENT_INTELLIGENCE_API_KEY')
     },
     missing,
     geminiKeyPrefix: geminiKey ? geminiKey.slice(0, 4) : null,
@@ -346,6 +354,80 @@ app.post('/api/chat', async (req, res) => {
     reply: snippet
       ? `Not in your session notes. Closest topic: ${snippet}${context.length > 120 ? '…' : ''}. (Connect Gemini for full answers.)`
       : 'Connect Gemini in .env to use AI chat.'
+  });
+});
+
+// Mock job interview — AI asks questions from session material
+app.post('/api/interview', async (req, res) => {
+  const {
+    context,
+    interviewType = 'mixed',
+    roleTitle = '',
+    experienceLevel = 'mid',
+    history = [],
+    userAnswer = '',
+    action = 'question'
+  } = req.body || {};
+
+  const safeAction = ['start', 'question', 'feedback', 'review'].includes(action) ? action : 'question';
+  const ctx = String(context || '').trim();
+  const level = ['junior', 'mid', 'senior'].includes(String(experienceLevel)) ? experienceLevel : 'mid';
+
+  try {
+    if (gemini.isGeminiEnabled()) {
+      if (safeAction === 'review') {
+        const review = await gemini.generateInterviewReview({
+          context: ctx,
+          interviewType,
+          roleTitle,
+          experienceLevel: level,
+          history
+        });
+        return res.json(review);
+      }
+      const reply = await gemini.generateInterviewTurn({
+        context: ctx,
+        interviewType,
+        roleTitle,
+        experienceLevel: level,
+        history,
+        userAnswer,
+        action: safeAction
+      });
+      return res.json({ reply });
+    }
+  } catch (error) {
+    if (!gemini.isAuthError(error)) {
+      console.error('Gemini interview error:', error);
+      return res.status(500).json({ error: error.message || 'Interview failed.' });
+    }
+  }
+
+  const mockByLevel = {
+    junior: 'Question 1: Tell me why you are interested in this role and one foundational concept from your material you are confident explaining.',
+    mid: 'Question 1: Walk me through a key concept from your material and how you have applied similar ideas in practice.',
+    senior: 'Question 1: Give a concise overview of the main theme in your material and how you would lead a team initiative around it.'
+  };
+  const type = String(interviewType || 'mixed').toLowerCase();
+  if (safeAction === 'review') {
+    const pairs = gemini.extractInterviewQAPairs(history);
+    const items = pairs
+      .filter((pair) => !pair.userAnswer || pair.userAnswer.length < 80)
+      .map((pair) => ({
+        questionNumber: pair.questionNumber,
+        question: pair.question,
+        userAnswer: pair.userAnswer || '(no answer)',
+        suggestedAnswer: `For ${roleTitle || 'this role'} at ${level} level: give a clear structure (situation, action, result), use a concrete example, and tie your answer to skills expected for the role. (Connect Gemini for tailored model answers.)`
+      }));
+    return res.json({ items });
+  }
+  if (safeAction === 'feedback') {
+    return res.json({
+      reply: 'Solid start — add a concrete example and tie your answer to a key term from your notes. For this level, show clearer impact and trade-offs. (Connect Gemini for detailed feedback.)'
+    });
+  }
+  res.json({
+    reply: mockByLevel[level] || mockByLevel.mid
   });
 });
 
@@ -472,18 +554,9 @@ app.post('/api/podcast', async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Podcast generation failed.' });
   }
-  const styleKey = (style || 'conversational').toLowerCase();
-  const styleLabels = {
-    conversational: 'Conversational',
-    lecture: 'Lecture style',
-    interview: 'Interview'
-  };
-  const hostsByStyle = {
-    conversational: ['Alex', 'Sam'],
-    lecture: ['Dr. Lee'],
-    interview: ['Host', 'Guest expert']
-  };
-  const hosts = hostsByStyle[styleKey] || hostsByStyle.conversational;
+  const styleKey = normalizePodcastStyle(style);
+  const styleMeta = PODCAST_STYLE_CONFIG[styleKey];
+  const hosts = styleMeta.hosts;
   const episodeTitle = (title || '').trim() || 'Study podcast episode (mock)';
   const snippet = source ? source.substring(0, 120) : 'your uploaded study material';
 
@@ -491,9 +564,9 @@ app.post('/api/podcast', async (req, res) => {
     title: episodeTitle,
     duration: '11:42',
     style: styleKey,
-    styleLabel: styleLabels[styleKey] || styleLabels.conversational,
+    styleLabel: styleMeta.label,
     hosts,
-    description: `An AI-generated ${styleLabels[styleKey] || 'study'} podcast based on ${snippet}${source.length > 120 ? '...' : ''}.`,
+    description: `An AI-generated ${styleMeta.label.toLowerCase()} podcast based on ${snippet}${source.length > 120 ? '...' : ''}.`,
     segments: [
       { time: '0:00', title: 'Welcome', summary: 'Hosts introduce the topic and what you will review in this episode.' },
       { time: '1:15', title: 'Core concepts', summary: 'Main ideas from your material explained in plain language.' },
@@ -501,28 +574,7 @@ app.post('/api/podcast', async (req, res) => {
       { time: '7:55', title: 'Practice recap', summary: 'Quick review questions to check understanding before the outro.' },
       { time: '10:30', title: 'Wrap-up', summary: 'Summary of takeaways and suggested next steps for studying.' }
     ],
-    script: styleKey === 'lecture'
-      ? [
-          { speaker: hosts[0], text: `Welcome to today's lecture review. We'll walk through the essential points from your notes.` },
-          { speaker: hosts[0], text: 'First, focus on the core concept and why it matters for your exam or assignment.' },
-          { speaker: hosts[0], text: 'Next, remember the key definition and try explaining it in your own words.' },
-          { speaker: hosts[0], text: 'Before you finish, quiz yourself on the practice recap section.' }
-        ]
-      : styleKey === 'interview'
-        ? [
-            { speaker: hosts[0], text: 'Thanks for joining us. What should students focus on first from this material?' },
-            { speaker: hosts[1], text: 'Start with the main idea, then connect it to the supporting examples in your notes.' },
-            { speaker: hosts[0], text: 'What is the most common mistake people make here?' },
-            { speaker: hosts[1], text: 'Skipping the definitions. Those terms usually show up again in harder questions.' },
-            { speaker: hosts[0], text: 'Great advice. Review the recap, then test yourself with a short quiz.' }
-          ]
-        : [
-            { speaker: hosts[0], text: `Hey ${hosts[1]}, ready to turn this study set into a quick podcast review?` },
-            { speaker: hosts[1], text: 'Absolutely. The big idea here is to connect the main concept to real examples.' },
-            { speaker: hosts[0], text: 'And the definition we need to remember is the one highlighted in the notes.' },
-            { speaker: hosts[1], text: 'Right. Pause after each chapter and say the answer out loud — that helps retention.' },
-            { speaker: hosts[0], text: 'Perfect. Let us wrap with a fast recap before your next study session.' }
-          ],
+    script: mockPodcastScript(styleKey, hosts),
     source: source ? source.substring(0, 160) : null
   };
 
@@ -1103,7 +1155,12 @@ app.post('/api/notes', upload.array('files', 30), async (req, res) => {
 
   try {
     if (text || files.length) {
-      const generated = await tryGemini(() => gemini.generateNotes({ text, files }));
+      const material = await resolveStudyMaterial({ text, files });
+      const generated = await tryGemini(() => (
+        material.useTextOnlyAi || (!files.length && text)
+          ? gemini.generateNotes({ text: material.text, files: [] })
+          : gemini.generateNotes({ text, files })
+      ));
       if (generated) {
         if (text && !files.length) {
           return res.json({
@@ -1320,7 +1377,7 @@ function enrichStudyNotesFromUrl(notes, meta) {
 }
 
 function normalizeGenerateOptions(input) {
-  const defaults = { notes: true, flashcards: true, quiz: true, podcast: true };
+  const defaults = { notes: true, flashcards: true, quiz: true, podcast: false };
   if (!input) return defaults;
   let raw = input;
   if (typeof raw === 'string') {
@@ -1330,15 +1387,65 @@ function normalizeGenerateOptions(input) {
       return defaults;
     }
   }
-  return {
-    notes: raw.notes !== false && raw.notes !== 'false',
-    flashcards: raw.flashcards !== false && raw.flashcards !== 'false',
-    quiz: raw.quiz !== false && raw.quiz !== 'false',
-    podcast: raw.podcast !== false && raw.podcast !== 'false'
-  };
+  const notes = raw.notes !== false && raw.notes !== 'false';
+  const flashcards = raw.flashcards !== false && raw.flashcards !== 'false';
+  const quiz = raw.quiz !== false && raw.quiz !== 'false';
+  const podcastRequested = raw.podcast === true || raw.podcast === 'true';
+  const podcastOnly = podcastRequested && !notes && !flashcards && !quiz;
+  return { notes, flashcards, quiz, podcast: podcastOnly };
 }
 
-async function buildStudySession({ text, files, urlMeta = null, generate: rawGenerate = null }) {
+const PODCAST_STYLE_CONFIG = {
+  conversational: { label: 'Conversational', hosts: ['Alex', 'Sam'] },
+  lecture: { label: 'Lecture', hosts: ['Dr. Lee'] },
+  interview: { label: 'Interview', hosts: ['Host', 'Guest expert'] },
+  practice: { label: 'Practice', hosts: ['Alex', 'Sam'] }
+};
+
+function normalizePodcastStyle(style) {
+  const key = String(style || 'conversational').toLowerCase();
+  return PODCAST_STYLE_CONFIG[key] ? key : 'conversational';
+}
+
+function mockPodcastScript(styleKey, hosts) {
+  if (styleKey === 'lecture') {
+    return [
+      { speaker: hosts[0], text: 'Welcome to today\'s lecture review. We will walk through the essential points from your notes.' },
+      { speaker: hosts[0], text: 'First, focus on the core concept and why it matters for your exam or assignment.' },
+      { speaker: hosts[0], text: 'Next, remember the key definition and try explaining it in your own words.' },
+      { speaker: hosts[0], text: 'Before you finish, quiz yourself on the practice recap section.' }
+    ];
+  }
+  if (styleKey === 'interview') {
+    return [
+      { speaker: hosts[0], text: 'Thanks for joining us. What should students focus on first from this material?' },
+      { speaker: hosts[1], text: 'Start with the main idea, then connect it to the supporting examples in your notes.' },
+      { speaker: hosts[0], text: 'What is the most common mistake people make here?' },
+      { speaker: hosts[1], text: 'Skipping the definitions. Those terms usually show up again in harder questions.' },
+      { speaker: hosts[0], text: 'Great advice. Review the recap, then test yourself with a short quiz.' }
+    ];
+  }
+  if (styleKey === 'practice') {
+    return [
+      { speaker: hosts[0], text: 'Practice time. I will ask you questions from your material — try to answer before Sam does.' },
+      { speaker: hosts[0], text: 'First question: what is the main concept you need to remember from this chapter?' },
+      { speaker: hosts[1], text: 'The central idea ties the definitions together — pause and say it out loud before I continue.' },
+      { speaker: hosts[0], text: 'Good. Next: name one key definition and explain it in one sentence.' },
+      { speaker: hosts[1], text: 'Use the exact terms from your notes — vague answers are easy to forget on exam day.' },
+      { speaker: hosts[0], text: 'Last one: what is a common trap or misconception students should watch for?' },
+      { speaker: hosts[1], text: 'Mixing up related formulas or skipping units. Always check your reasoning step by step.' }
+    ];
+  }
+  return [
+    { speaker: hosts[0], text: `Hey ${hosts[1]}, ready to turn this study set into a quick podcast review?` },
+    { speaker: hosts[1], text: 'Absolutely. The big idea here is to connect the main concept to real examples.' },
+    { speaker: hosts[0], text: 'And the definition we need to remember is the one highlighted in the notes.' },
+    { speaker: hosts[1], text: 'Right. Pause after each chapter and say the answer out loud — that helps retention.' },
+    { speaker: hosts[0], text: 'Perfect. Let us wrap with a fast recap before your next study session.' }
+  ];
+}
+
+async function buildStudySession({ text, files, urlMeta = null, generate: rawGenerate = null, material = null, podcastStyle = 'conversational' }) {
   const generate = normalizeGenerateOptions(rawGenerate);
   if (!generate.notes && !generate.flashcards && !generate.quiz && !generate.podcast) {
     throw new Error('Select at least one output to generate.');
@@ -1348,24 +1455,60 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
   const canFlashcardsFromFile = generate.flashcards && files.length === 1 && !text && !audioOnly;
   let notes = null;
   let sourceText = text;
+  let originalText = String(text || '').trim();
   let usedAi = false;
   let flashcards = [];
   let quiz = { title: 'Practice quiz', questions: [] };
   const inputType = urlMeta ? 'url' : audioOnly ? 'audio' : (text && !files.length) ? 'text' : 'files';
   const audioUrl = audioOnly && files[0]?.filename ? `/uploads/${files[0].filename}` : null;
 
-  const shouldReadMaterial = generate.notes
-    || (generate.podcast && (audioOnly || files.length > 0 || !text))
-    || (generate.flashcards && files.length > 0 && !canFlashcardsFromFile)
-    || (generate.quiz && files.length > 0 && !text);
+  let materialText = text;
+  let useTextOnlyAi = Boolean(urlMeta && text.length >= 80);
+  let extractionMeta = urlMeta
+    ? { provider: urlMeta.urlType === 'youtube' ? 'youtube-transcript' : 'website', extractedCount: 1 }
+    : null;
 
-  if (shouldReadMaterial) {
+  if (!urlMeta && !audioOnly && files.length) {
+    const resolved = material || await resolveStudyMaterial({ text, files });
+    materialText = resolved.text || text;
+    originalText = String(resolved.sourceText || resolved.text || text || '').trim();
+    useTextOnlyAi = Boolean(resolved.useTextOnlyAi);
+    extractionMeta = resolved.extraction || null;
+  } else if (!urlMeta && !files.length && text.length >= 80) {
+    materialText = text;
+    originalText = String(text || '').trim();
+    useTextOnlyAi = true;
+  } else if (urlMeta && text) {
+    originalText = String(text || '').trim();
+    materialText = originalText;
+  }
+
+  if (materialText.length >= 80) useTextOnlyAi = true;
+
+  const shouldGenerateNotes = generate.notes && (
+    audioOnly
+    || files.length > 0
+    || Boolean(String(materialText || text || '').trim())
+  );
+
+  if (shouldGenerateNotes) {
     let notesResult;
     let cardsFromFileResult = null;
     if (audioOnly) {
       notesResult = await tryGeminiStudy(() => gemini.generateNotesFromAudio(files[0]), 'notes-audio');
+    } else if (files.length && useTextOnlyAi) {
+      notesResult = await tryGeminiStudy(
+        () => gemini.generateNotes({ text: materialText, files: [] }),
+        'notes-extracted'
+      );
+      if (canFlashcardsFromFile && generate.flashcards) {
+        cardsFromFileResult = await tryGeminiStudy(
+          () => gemini.generateFlashcardsFromText(materialText),
+          'flashcards-extracted'
+        );
+      }
     } else if (files.length) {
-      if (canFlashcardsFromFile && generate.notes && generate.flashcards) {
+      if (canFlashcardsFromFile && generate.flashcards) {
         [notesResult, cardsFromFileResult] = await Promise.all([
           tryGeminiStudy(() => gemini.generateNotes({ text, files }), 'notes-files'),
           tryGeminiStudy(() => gemini.generateFlashcardsFromFile(files[0]), 'flashcards-file')
@@ -1374,19 +1517,41 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
         notesResult = await tryGeminiStudy(() => gemini.generateNotes({ text, files }), 'notes-files');
       }
     } else {
-      notesResult = await tryGeminiStudy(() => gemini.generateNotes({ text }), 'notes-text');
+      const youtubeUrl = urlMeta?.urlType === 'youtube' ? String(urlMeta.source || '').trim() : '';
+      const useYoutubeVideo = Boolean(youtubeUrl && urlMeta.captionless);
+      if (useYoutubeVideo) {
+        notesResult = await tryGeminiStudy(
+          () => gemini.generateNotesFromYoutube({
+            url: youtubeUrl,
+            title: urlMeta.title || '',
+            text: materialText || text
+          }),
+          'notes-youtube-video'
+        );
+      } else {
+        notesResult = await tryGeminiStudy(() => gemini.generateNotes({ text: materialText || text }), 'notes-text');
+      }
     }
     notes = notesResult.value;
     usedAi = usedAi || notesResult.usedAi;
     if (!hasStudyNotes(notes)) notes = mockStudyNotes(text, files);
     notes = urlMeta ? enrichStudyNotesFromUrl(notes, urlMeta) : enrichStudyNotes(notes, text, files);
-    sourceText = [...(notes.bullets || []), text].filter(Boolean).join('\n');
+    sourceText = String(materialText || text || '').trim();
     if (cardsFromFileResult) {
       flashcards = cardsFromFileResult.value || [];
       usedAi = usedAi || cardsFromFileResult.usedAi;
     }
-  } else if (text) {
-    sourceText = text;
+  } else if (generate.podcast && audioOnly && files.length) {
+    const audioResult = await tryGeminiStudy(() => gemini.generateNotesFromAudio(files[0]), 'podcast-audio');
+    const transcript = (audioResult.value?.bullets || []).join('\n').trim();
+    if (transcript) {
+      materialText = transcript;
+      sourceText = transcript;
+      if (!originalText.trim()) originalText = transcript;
+    }
+    usedAi = usedAi || audioResult.usedAi;
+  } else if (text || materialText) {
+    sourceText = materialText || text;
   }
 
   if (!generate.notes) {
@@ -1398,12 +1563,19 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
   } else if (!hasStudyNotes(notes)) {
     notes = mockStudyNotes(text, files);
     notes = urlMeta ? enrichStudyNotesFromUrl(notes, urlMeta) : enrichStudyNotes(notes, text, files);
-    sourceText = [...(notes.bullets || []), text].filter(Boolean).join('\n');
+    if (!String(materialText || text || '').trim()) {
+      sourceText = [...(notes.bullets || []), text].filter(Boolean).join('\n');
+    }
   }
 
   if (generate.flashcards && !flashcards.length) {
     let cardsResult;
-    if (files.length === 1 && !text && !audioOnly) {
+    if (useTextOnlyAi || (materialText.length >= 80 && files.length)) {
+      cardsResult = await tryGeminiStudy(
+        () => gemini.generateFlashcardsFromText(materialText || sourceText),
+        'flashcards-text'
+      );
+    } else if (files.length === 1 && !text && !audioOnly) {
       cardsResult = await tryGeminiStudy(() => gemini.generateFlashcardsFromFile(files[0]), 'flashcards-file');
     } else {
       cardsResult = await tryGeminiStudy(() => gemini.generateFlashcardsFromText(sourceText), 'flashcards-text');
@@ -1422,10 +1594,12 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
 
   let podcast = null;
   if (generate.podcast) {
+    const styleKey = normalizePodcastStyle(podcastStyle);
+    const styleMeta = PODCAST_STYLE_CONFIG[styleKey];
     const podcastResult = await tryGeminiStudy(() => gemini.generatePodcast({
       text: sourceText,
       title: notes.title || 'Study podcast',
-      style: 'conversational'
+      style: styleKey
     }), 'podcast');
     podcast = podcastResult.value;
     usedAi = usedAi || podcastResult.usedAi;
@@ -1434,24 +1608,22 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
       podcast = {
         title: notes.title || 'Study podcast',
         duration: '10:00',
-        style: 'conversational',
-        styleLabel: 'Conversational',
-        hosts: ['Alex', 'Sam'],
-        description: 'A review podcast based on your uploaded material.',
+        style: styleKey,
+        styleLabel: styleMeta.label,
+        hosts: styleMeta.hosts,
+        description: `A ${styleMeta.label.toLowerCase()} review podcast based on your uploaded material.`,
         segments: [
           { time: '0:00', title: 'Introduction', summary: 'Overview of the main topic.' },
           { time: '2:00', title: 'Key concepts', summary: 'Core ideas explained simply.' },
           { time: '6:00', title: 'Review', summary: 'Quick recap and practice tips.' }
         ],
-        script: [
-          { speaker: 'Alex', text: 'Let us walk through the key points from your material.' },
-          { speaker: 'Sam', text: 'Focus on the main definitions and try explaining them out loud.' }
-        ]
+        script: mockPodcastScript(styleKey, styleMeta.hosts)
       };
     }
 
-    // Always use Gemini TTS when building study sessions locally
-    if (podcast?.script?.length) {
+    const podcastOnly = generate.podcast && !generate.notes && !generate.flashcards && !generate.quiz;
+    // Podcast-only sessions generate voices in a follow-up request so the first response returns faster.
+    if (podcast?.script?.length && !podcastOnly) {
       try {
         const audioResult = await tryGeminiStudy(() => gemini.generatePodcastAudio(podcast), 'podcast-audio');
         const audio = audioResult.value;
@@ -1474,11 +1646,20 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
   }
 
   if (!sourceText.trim()) {
-    if (text.trim()) sourceText = text.trim();
-    else if (hasStudyNotes(notes)) sourceText = notes.bullets.join('\n');
+    if (String(materialText || text || '').trim()) {
+      sourceText = String(materialText || text || '').trim();
+    } else if (text.trim()) {
+      sourceText = text.trim();
+    } else if (hasStudyNotes(notes)) {
+      sourceText = notes.bullets.join('\n');
+    }
+  }
+  if (!originalText.trim()) {
+    originalText = String(text || materialText || '').trim();
   }
 
   const aiConfigured = gemini.isGeminiEnabled();
+  const sourceLabel = studyInputLabel(inputType, notes, text, files, urlMeta);
 
   return {
     type: 'study',
@@ -1486,14 +1667,20 @@ async function buildStudySession({ text, files, urlMeta = null, generate: rawGen
     quiz,
     flashcards,
     podcast: podcast || {},
+    source: sourceLabel,
+    originalText: originalText.slice(0, 50000),
     sourceText: sourceText.slice(0, 50000),
     inputType,
-    inputText: (text || sourceText || '').slice(0, 50000),
+    inputText: urlMeta?.source
+      ? String(urlMeta.source).slice(0, 50000)
+      : (text || '').slice(0, 50000),
     audioUrl,
     generate,
     aiConfigured,
     aiUsed: usedAi,
-    usedMockFallback: !usedAi && (generate.notes || generate.flashcards || generate.quiz || generate.podcast)
+    usedMockFallback: !usedAi && (generate.notes || generate.flashcards || generate.quiz || generate.podcast),
+    textExtraction: extractionMeta,
+    materialTextLength: (materialText || sourceText || '').length
   };
 }
 
@@ -1557,7 +1744,8 @@ app.post('/api/study', upload.array('files', 30), async (req, res) => {
     const result = await buildStudySession({
       text,
       files,
-      generate: req.body?.generate
+      generate: req.body?.generate,
+      podcastStyle: req.body?.podcastStyle
     });
     const resolvedName = resolveSessionName(sessionName, {
       notes: result.notes,
@@ -1607,17 +1795,19 @@ app.post('/api/study/url', async (req, res) => {
       return res.status(400).json({ error: 'Unsupported link type.' });
     }
 
-    const extracted = await extractUrlStudyText(url, urlType);
+    const material = await resolveStudyMaterial({ url, urlType });
     const result = await buildStudySession({
-      text: extracted.text,
+      text: material.text,
       files: [],
-      urlMeta: extracted,
-      generate: req.body?.generate
+      urlMeta: material.urlMeta,
+      generate: req.body?.generate,
+      material,
+      podcastStyle: req.body?.podcastStyle
     });
     const resolvedName = resolveSessionName(sessionName, {
       notes: result.notes,
-      text: extracted.text,
-      urlMeta: extracted,
+      text: material.text,
+      urlMeta: material.urlMeta,
       inputType: 'url'
     });
     const ownerId = resolveOwnerId(req);
@@ -1626,9 +1816,9 @@ app.post('/api/study/url', async (req, res) => {
       try {
         savedSession = await persistStudySessionForOwner(ownerId, result, {
           name: resolvedName,
-          urlMeta: extracted,
+          urlMeta: material.urlMeta,
           inputType: 'url',
-          inputText: extracted.text.slice(0, 50000)
+          inputText: material.text.slice(0, 50000)
         });
       } catch (err) {
         console.warn('Study session DB save:', err.message);
@@ -1649,12 +1839,14 @@ app.post('/api/video', async (req, res) => {
   const url = (req.body?.url || '').trim();
   if (!url) return res.status(400).json({ error: 'Paste a YouTube link first.' });
   try {
-    const extracted = await extractUrlStudyText(url, 'youtube');
+    const material = await resolveStudyMaterial({ url, urlType: 'youtube' });
     const result = await buildStudySession({
-      text: extracted.text,
+      text: material.text,
       files: [],
-      urlMeta: extracted,
-      generate: req.body?.generate
+      urlMeta: material.urlMeta,
+      generate: req.body?.generate,
+      material,
+      podcastStyle: req.body?.podcastStyle
     });
     res.json(result);
   } catch (err) {

@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous" />
     <link rel="stylesheet" href="styles.css?v=openai-tint" />
   </head>
   <body class="app-layout app-layout-mg" data-page="dashboard">
@@ -63,6 +64,14 @@
         <button type="button" class="app-sidebar-link" data-dash-session-open="website">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/></svg>
           Website link
+        </button>
+        <button type="button" class="app-sidebar-link" data-dash-session-open="podcast">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/><path d="M8 22h8"/></svg>
+          Generate podcast
+        </button>
+        <button type="button" class="app-sidebar-link" data-dash-session-open="interview">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Mock interview
         </button>
       </nav>
 
@@ -239,6 +248,7 @@
                   <p>Upload successful — your study session is ready.</p>
                 </div>
                 <h2 id="study-results-title" class="study-results-heading">Study session</h2>
+                <div id="study-session-source" class="study-session-source" hidden></div>
                 <p id="study-results-meta" class="study-result-meta"></p>
               </div>
               <div class="study-results-actions">
@@ -250,25 +260,31 @@
             <div class="session-progress-card" id="session-progress">
               <p class="session-progress-label">Generated for you</p>
               <div class="session-checklist" id="session-reading-list">
+                <button type="button" class="session-check-item" data-goto="original" hidden><span class="check-icon">○</span> Original source</button>
                 <button type="button" class="session-check-item" data-goto="notes" hidden><span class="check-icon">○</span> Notes</button>
                 <button type="button" class="session-check-item" data-goto="flashcards" hidden><span class="check-icon">○</span> Flashcards</button>
                 <button type="button" class="session-check-item" data-goto="quiz" hidden><span class="check-icon">○</span> Quiz</button>
+                <button type="button" class="session-check-item" data-goto="interview" hidden><span class="check-icon">○</span> Mock interview</button>
                 <button type="button" class="session-check-item" data-goto="podcast" hidden><span class="check-icon">○</span> Podcast</button>
                 <button type="button" class="session-check-item" data-goto="tutor" hidden><span class="check-icon">○</span> AI chat</button>
               </div>
             </div>
 
             <div class="study-tabs study-tabs-scroll" id="study-reading-tabs" role="tablist">
+              <button type="button" class="study-tab" data-tab="original" hidden>Original source</button>
               <button type="button" class="study-tab" data-tab="notes" hidden>Notes</button>
               <button type="button" class="study-tab" data-tab="flashcards" hidden>Flashcards</button>
               <button type="button" class="study-tab" data-tab="quiz" hidden>Quiz</button>
+              <button type="button" class="study-tab" data-tab="interview" hidden>Mock interview</button>
               <button type="button" class="study-tab" data-tab="podcast" hidden>Podcast</button>
               <button type="button" class="study-tab" data-tab="tutor" hidden>AI chat</button>
             </div>
 
+            <div id="study-tab-original" class="study-tab-panel study-result" hidden></div>
             <div id="study-tab-notes" class="study-tab-panel study-result" hidden></div>
             <div id="study-tab-flashcards" class="study-tab-panel" hidden></div>
             <div id="study-tab-quiz" class="study-tab-panel" hidden></div>
+            <div id="study-tab-interview" class="study-tab-panel" hidden></div>
             <div id="study-tab-podcast" class="study-tab-panel" hidden></div>
             <div id="study-tab-tutor" class="study-tab-panel" hidden></div>
           </section>
@@ -290,7 +306,68 @@
           </div>
         </div>
         <div class="study-modal-body dash-session-modal-body">
-          <label class="study-field study-field-compact">
+          <div class="study-mode-panel" data-dash-mode-panel="interview" hidden>
+            <div class="study-interview-options dash-interview-setup">
+              <label class="study-interview-option">
+                <span class="study-field-label">Job title</span>
+                <input type="text" id="dash-interview-role-input" class="study-session-name" placeholder="e.g. Software Engineer, Data Analyst" maxlength="80" required />
+              </label>
+              <label class="study-interview-option">
+                <span class="study-field-label">Experience level</span>
+                <select id="dash-interview-level-input" class="study-select">
+                  <option value="junior">Junior</option>
+                  <option value="mid" selected>Mid-level</option>
+                  <option value="senior">Senior</option>
+                </select>
+              </label>
+              <label class="study-interview-option">
+                <span class="study-field-label">Interview type</span>
+                <select id="dash-interview-type-input" class="study-select">
+                  <option value="behavioral">Behavioral</option>
+                  <option value="technical">Technical</option>
+                  <option value="situational">Situational</option>
+                  <option value="mixed" selected>Mixed</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div class="study-mode-panel" data-dash-mode-panel="podcast" hidden>
+            <div class="dash-podcast-setup">
+              <div class="dash-podcast-tabs" id="dash-podcast-source-tabs" role="tablist" aria-label="Podcast source">
+                <button type="button" class="dash-podcast-tab" id="dash-podcast-tab-text" data-podcast-source="text" role="tab" aria-selected="false" aria-controls="dash-podcast-panel-text">Paste text</button>
+                <button type="button" class="dash-podcast-tab is-active" id="dash-podcast-tab-files" data-podcast-source="files" role="tab" aria-selected="true" aria-controls="dash-podcast-panel-files">Upload</button>
+              </div>
+              <div class="dash-podcast-source-panel" data-podcast-source-panel="text" id="dash-podcast-panel-text" role="tabpanel" aria-labelledby="dash-podcast-tab-text" hidden>
+                <label class="study-field">
+                  <span class="study-field-label">Source text</span>
+                  <textarea id="dash-podcast-text" class="study-text-input dash-paste-text" rows="7" placeholder="Paste notes, a lecture transcript, or chapter text…"></textarea>
+                </label>
+              </div>
+              <div class="dash-podcast-source-panel is-active" data-podcast-source-panel="files" id="dash-podcast-panel-files" role="tabpanel" aria-labelledby="dash-podcast-tab-files">
+                <div class="study-drop-card" id="dash-podcast-drop-zone">
+                  <input type="file" id="dash-podcast-file-input" multiple hidden />
+                  <button type="button" class="study-drop-btn" id="dash-podcast-file-trigger">
+                    <span class="study-drop-icon">+</span>
+                    <span class="study-drop-title">Drop files or click to upload</span>
+                    <span class="study-drop-hint">PDF · Word · Images · Slides · Sheets · Text files</span>
+                  </button>
+                </div>
+                <ul id="dash-podcast-file-list" class="study-file-chips" hidden></ul>
+              </div>
+              <label class="study-field study-field-compact dash-podcast-style-field" for="dash-podcast-style">
+                <span class="study-field-label">Podcast style</span>
+                <select id="dash-podcast-style" class="study-select">
+                  <option value="conversational">Conversational</option>
+                  <option value="lecture">Lecture</option>
+                  <option value="interview">Interview</option>
+                  <option value="practice">Practice</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <label class="study-field study-field-compact" id="dash-session-name-wrap">
             <span class="study-field-label study-field-label-muted">Session name</span>
             <input type="text" id="dash-session-name" class="study-session-name" placeholder="e.g. Biology — Chapter 5" maxlength="80" />
           </label>
@@ -349,7 +426,7 @@
               <span class="study-field-label">Study text</span>
               <textarea id="dash-paste-text" class="study-text-input dash-paste-text" rows="8" placeholder="Paste notes, lecture transcript, or chapter text…"></textarea>
             </label>
-            <p class="study-result-meta">We turn pasted text into notes, flashcards, quiz, and podcast.</p>
+            <p class="study-result-meta">We turn pasted text into notes, flashcards, and a practice quiz.</p>
           </div>
 
           <div class="study-mode-panel" data-dash-mode-panel="youtube" hidden>
@@ -365,7 +442,7 @@
               <span class="study-field-label">Website URL</span>
               <input type="url" id="dash-website-url" class="study-session-name" placeholder="https://example.com/article" inputmode="url" />
             </label>
-            <p class="study-result-meta">We read the page and turn it into notes, flashcards, quiz, and podcast.</p>
+            <p class="study-result-meta">We read the page and turn it into notes, flashcards, and a practice quiz.</p>
           </div>
 
           <div id="dash-loading" class="study-loading-panel" hidden>
@@ -378,12 +455,11 @@
 
           <div class="study-generate-options">
             <p class="study-field-label">What to generate</p>
-            <p class="study-result-meta study-generate-hint">Pick notes, flashcards, and quiz from your material — podcast is optional.</p>
+            <p class="study-result-meta study-generate-hint">Pick notes, flashcards, and practice quiz. Your original source is always kept.</p>
             <div class="study-generate-picks">
               <label class="study-generate-pick"><input type="checkbox" id="dash-gen-notes" checked /> Notes</label>
               <label class="study-generate-pick"><input type="checkbox" id="dash-gen-flashcards" checked /> Flashcards</label>
               <label class="study-generate-pick"><input type="checkbox" id="dash-gen-quiz" checked /> Practice quiz</label>
-              <label class="study-generate-pick"><input type="checkbox" id="dash-gen-podcast" checked /> Podcast</label>
             </div>
           </div>
 
@@ -427,6 +503,8 @@
       </div>
     </div>
 
-    <script src="script.js?v=47"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous"></script>
+    <script src="script.js?v=91"></script>
   </body>
 </html>

@@ -161,6 +161,8 @@ async function signUpWithEmail(email, password, name) {
 
 function mapSessionRow(row) {
   if (!row) return null;
+  const flashcards = Array.isArray(row.flashcards) ? row.flashcards : [];
+  const quiz = row.quiz || null;
   return {
     id: row.id,
     name: row.name,
@@ -169,14 +171,15 @@ function mapSessionRow(row) {
     inputText: row.input_text || '',
     audioUrl: row.audio_url || '',
     notes: row.notes || null,
-    quiz: row.quiz || null,
-    flashcards: row.flashcards || [],
-    podcast: row.podcast || null,
+    quiz,
+    flashcards,
+    podcast: null,
     sourceText: row.source_text || '',
-    cardCount: row.card_count || 0,
-    quizCount: row.quiz_count || 0,
-    tutorDone: Boolean(row.tutor_done),
-    tutorChat: Array.isArray(row.tutor_chat) ? row.tutor_chat : [],
+    originalText: row.source_text || '',
+    cardCount: row.card_count || flashcards.length,
+    quizCount: row.quiz_count || quiz?.questions?.length || 0,
+    tutorDone: false,
+    tutorChat: [],
     createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now()
   };
@@ -240,7 +243,9 @@ async function getStudySession(ownerId, id) {
 async function upsertStudySession(ownerId, session) {
   const sb = getClient();
   const now = new Date().toISOString();
-  const row = {
+  const flashcards = Array.isArray(session.flashcards) ? session.flashcards : [];
+  const quiz = session.quiz || null;
+  const baseRow = {
     id: session.id,
     owner_id: ownerId,
     name: session.name || 'Study session',
@@ -249,21 +254,29 @@ async function upsertStudySession(ownerId, session) {
     input_text: (session.inputText || '').slice(0, 50000),
     audio_url: session.audioUrl || null,
     notes: session.notes || null,
-    quiz: session.quiz || null,
-    flashcards: session.flashcards || [],
-    podcast: slimPodcastForDb(session.podcast),
-    source_text: (session.sourceText || session.inputText || '').slice(0, 50000),
-    card_count: session.cardCount || (session.flashcards?.length ?? 0),
-    quiz_count: session.quizCount || (session.quiz?.questions?.length ?? 0),
-    tutor_done: Boolean(session.tutorDone),
-    tutor_chat: Array.isArray(session.tutorChat) ? session.tutorChat.slice(-40) : [],
+    quiz,
+    flashcards,
+    podcast: null,
+    source_text: (session.originalText || session.sourceText || session.inputText || '').slice(0, 50000),
+    card_count: session.cardCount ?? flashcards.length,
+    quiz_count: session.quizCount ?? quiz?.questions?.length ?? 0,
+    tutor_done: false,
+    tutor_chat: [],
     updated_at: now
   };
-  const { data, error } = await sb
+  const payload = { ...baseRow, created_at: session.createdAt ? new Date(session.createdAt).toISOString() : now };
+  let { data, error } = await sb
     .from('study_sessions')
-    .upsert({ ...row, created_at: session.createdAt ? new Date(session.createdAt).toISOString() : now })
+    .upsert(payload)
     .select('*')
     .single();
+  if (error && /tutor_chat|tutor_done/i.test(error.message || '')) {
+    ({ data, error } = await sb
+      .from('study_sessions')
+      .upsert({ ...baseRow, created_at: payload.created_at })
+      .select('*')
+      .single());
+  }
   if (error) throw error;
   return mapSessionRow(data);
 }

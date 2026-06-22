@@ -159,27 +159,134 @@ function extractJsonAfterMarker(html, marker) {
   return null;
 }
 
-async function fetchYoutubePlayerDetails(videoId) {
-  const watchRes = await fetchWithTimeout(`https://www.youtube.com/watch?v=${videoId}`);
-  if (!watchRes.ok) return { title: 'YouTube video', description: '' };
-
+async function fetchYoutubeWatchPlayer(videoId) {
+  const watchRes = await fetchWithTimeout(`https://www.youtube.com/watch?v=${videoId}`, {
+    headers: {
+      ...BROWSER_HEADERS,
+      Cookie: 'CONSENT=PENDING+987'
+    }
+  });
+  if (!watchRes.ok) return null;
   const html = await watchRes.text();
-  const player = extractJsonAfterMarker(html, 'ytInitialPlayerResponse');
-  const details = player?.videoDetails || {};
+  return extractJsonAfterMarker(html, 'ytInitialPlayerResponse');
+}
+
+async function fetchYoutubePlayerDetails(videoId, player = null) {
+  const resolved = player || await fetchYoutubeWatchPlayer(videoId);
+  const details = resolved?.videoDetails || {};
   return {
     title: details.title || 'YouTube video',
     description: details.shortDescription || ''
   };
 }
 
-async function fetchYoutubeTranscript(videoId) {
-  try {
-    const segments = await YoutubeTranscript.fetchTranscript(videoId);
-    const text = segments.map((seg) => seg.text).join(' ').replace(/\s+/g, ' ').trim();
-    if (text.length >= 40) return text;
-  } catch {
-    /* try legacy fallback below */
+function rankCaptionTrack(track) {
+  const lang = String(track?.languageCode || '').toLowerCase();
+  const kind = String(track?.kind || '').toLowerCase();
+  let score = 10;
+  if (lang === 'en' || lang.startsWith('en-')) score = 0;
+  else if (lang.startsWith('en')) score = 1;
+  if (kind === 'asr') score += 2;
+  return score;
+}
+
+function parseCaptionTrackBody(body) {
+  const trimmed = String(body || '').trim();
+  if (!trimmed) return '';
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const data = JSON.parse(trimmed);
+      return (data.events || [])
+        .flatMap((event) => (event.segs || []).map((seg) => seg.utf8 || '').filter(Boolean))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    } catch {
+      /* try other formats */
+    }
   }
+
+  if (trimmed.includes('<text')) {
+    return [...trimmed.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g)]
+      .map((match) => htmlToPlainText(match[1]))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  if (trimmed.includes('WEBVTT')) {
+    return trimmed
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('WEBVTT') && !/^\d+$/.test(line) && !/^\d{2}:\d{2}/.test(line))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  return '';
+}
+
+async function fetchCaptionFromTrack(baseUrl) {
+  const candidates = [
+    `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}fmt=json3`,
+    baseUrl,
+    `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}fmt=srv3`
+  ];
+  for (const url of candidates) {
+    try {
+      const res = await fetchWithTimeout(url);
+      if (!res.ok) continue;
+      const body = await res.text();
+      if (body.trimStart().startsWith('<!DOCTYPE') || body.trimStart().startsWith('<html')) continue;
+      const text = parseCaptionTrackBody(body);
+      if (text.length >= 40) return text;
+    } catch {
+      /* try next format */
+    }
+  }
+  return '';
+}
+
+async function fetchYoutubeTranscriptFromPlayer(player) {
+  const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  if (!Array.isArray(tracks) || !tracks.length) return '';
+
+  const sorted = [...tracks].sort((a, b) => rankCaptionTrack(a) - rankCaptionTrack(b));
+  for (const track of sorted) {
+    if (!track?.baseUrl) continue;
+    const text = await fetchCaptionFromTrack(track.baseUrl);
+    if (text.length >= 40) return text;
+  }
+  return '';
+}
+
+async function fetchYoutubeTranscriptViaPackage(videoId) {
+  const attempts = [
+    () => YoutubeTranscript.fetchTranscript(videoId, { lang: 'en' }),
+    () => YoutubeTranscript.fetchTranscript(videoId),
+    () => YoutubeTranscript.fetchTranscript(videoId, { lang: 'en-US' })
+  ];
+  for (const attempt of attempts) {
+    try {
+      const segments = await attempt();
+      const text = segments.map((seg) => seg.text).join(' ').replace(/\s+/g, ' ').trim();
+      if (text.length >= 40) return text;
+    } catch {
+      /* try next language/default */
+    }
+  }
+  return '';
+}
+
+async function fetchYoutubeTranscript(videoId, player = null) {
+  const resolvedPlayer = player || await fetchYoutubeWatchPlayer(videoId);
+  const fromPlayer = await fetchYoutubeTranscriptFromPlayer(resolvedPlayer);
+  if (fromPlayer.length >= 40) return fromPlayer;
+
+  const fromPackage = await fetchYoutubeTranscriptViaPackage(videoId);
+  if (fromPackage.length >= 40) return fromPackage;
 
   return fetchYoutubeTranscriptLegacy(videoId);
 }
@@ -228,43 +335,48 @@ async function fetchYoutubeMetadata(url, videoId) {
   return { title, author };
 }
 
+function buildYoutubeStudyText({ title, author, url, transcript, description }) {
+  const parts = [`YouTube video: ${title}`];
+  if (author) parts.push(`Channel: ${author}`);
+  parts.push(`Source: ${url}`);
+  if (transcript.length >= 20) parts.push(`Transcript:\n${transcript}`);
+  if (description) parts.push(`Description:\n${description}`);
+  return parts.join('\n\n').slice(0, 120000);
+}
+
 async function extractYoutubeStudyText(rawUrl) {
   const url = assertPublicHttpUrl(normalizeUrl(rawUrl));
   const videoId = getYoutubeVideoId(url);
   if (!videoId) throw new Error('Enter a valid YouTube link.');
 
+  const player = await fetchYoutubeWatchPlayer(videoId);
   const [{ title, author }, transcript, playerDetails] = await Promise.all([
     fetchYoutubeMetadata(url, videoId),
-    fetchYoutubeTranscript(videoId),
-    fetchYoutubePlayerDetails(videoId)
+    fetchYoutubeTranscript(videoId, player),
+    fetchYoutubePlayerDetails(videoId, player)
   ]);
 
-  if (transcript.length >= 80) {
-    return {
-      title,
-      source: url,
-      urlType: 'youtube',
-      text: `YouTube lecture: ${title}${author ? ` by ${author}` : ''}\nSource: ${url}\n\nTranscript:\n${transcript}`.slice(0, 120000)
-    };
-  }
-
+  const resolvedTitle = title || playerDetails.title || 'YouTube video';
   const description = (playerDetails.description || '').trim();
-  if (description.length >= 200) {
-    return {
-      title,
-      source: url,
-      urlType: 'youtube',
-      text: [
-        `YouTube video: ${title}`,
-        author ? `Channel: ${author}` : '',
-        `URL: ${url}`,
-        transcript ? `Partial transcript:\n${transcript}` : '',
-        `Description:\n${description}`
-      ].filter(Boolean).join('\n\n').slice(0, 120000)
-    };
+  const text = buildYoutubeStudyText({
+    title: resolvedTitle,
+    author,
+    url,
+    transcript,
+    description
+  });
+
+  if (text.replace(/\s+/g, ' ').trim().length < 30) {
+    throw new Error('Could not load this YouTube video. Check the link and try again.');
   }
 
-  throw new Error('No captions found for this YouTube video. Try a lecture with subtitles enabled.');
+  return {
+    title: resolvedTitle,
+    source: url,
+    urlType: 'youtube',
+    captionless: transcript.length < 80,
+    text
+  };
 }
 
 async function extractWebsiteStudyText(rawUrl) {

@@ -26,6 +26,62 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+function escHtml(text) {
+  return String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function splitNoteBullets(bullets) {
+  const out = [];
+  for (const bullet of bullets || []) {
+    const text = String(bullet || '').trim();
+    if (!text) continue;
+    const parts = text
+      .split(/(?=(?:\*\*)?Topic:\s)/i)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length > 1) out.push(...parts);
+    else out.push(text);
+  }
+  return out;
+}
+
+function normalizeStudyMarkdown(text) {
+  return String(text ?? '')
+    .replace(/Topic:\s*\*\*\s*/gi, '**Topic:** ')
+    .replace(/Topic:\s*\*\*(?=[A-Za-z])/gi, '**Topic:** ');
+}
+
+function formatStudyInline(text) {
+  const normalized = normalizeStudyMarkdown(text);
+  const parts = normalized.split(/(\$[^$]+\$)/g);
+  return parts.map((part) => {
+    if (/^\$[^$]+\$/.test(part)) return part;
+    let html = escHtml(part);
+    html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*\*/g, '');
+    html = html.replace(/(?<![\w$\\])\*([^*\n]+?)\*(?![\w$])/g, '<em>$1</em>');
+    return html;
+  }).join('');
+}
+
+function typesetRichContent(container) {
+  if (!container || typeof window.renderMathInElement !== 'function') return;
+  try {
+    window.renderMathInElement(container, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '$', right: '$', display: false },
+        { left: '\\(', right: '\\)', display: false },
+        { left: '\\[', right: '\\]', display: true }
+      ],
+      throwOnError: false,
+      ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+    });
+  } catch {
+    /* keep readable plain text if KaTeX fails */
+  }
+}
+
 // BipoAi mock client utilities
 function formatApiError(msg) {
   const lower = (msg || '').toLowerCase();
@@ -208,6 +264,28 @@ function notifyDashboardPanelChange(panelKey) {
   window.dispatchEvent(new CustomEvent('bipai:dashboard-panel', { detail: { panel: panelKey } }));
 }
 
+function setSidebarUploadSelection(variant) {
+  document.querySelectorAll('.app-sidebar-nav [data-dash-session-open]').forEach((btn) => {
+    btn.classList.toggle('is-active', Boolean(variant) && btn.dataset.dashSessionOpen === variant);
+  });
+  if (variant) {
+    document.querySelectorAll('[data-sidebar-section]').forEach((link) => {
+      link.classList.remove('is-active');
+    });
+  }
+}
+
+function restoreSidebarDashboardSection() {
+  setSidebarUploadSelection(null);
+  const hashKey = location.hash.replace('#dashboard-', '');
+  const keys = Array.from(document.querySelectorAll('[data-dash-panel]')).map((panel) => panel.dataset.dashPanel);
+  const activeKey = keys.includes(hashKey) ? hashKey : 'overview';
+  document.querySelectorAll('[data-sidebar-section]').forEach((link) => {
+    const href = link.getAttribute('href') || '';
+    link.classList.toggle('is-active', href === `#dashboard-${activeKey}`);
+  });
+}
+
 function slimStudySessionForStorage(payload, { aggressive = false } = {}) {
   const clone = JSON.parse(JSON.stringify(payload));
   const audio = clone.data?.podcast?.audio;
@@ -215,11 +293,25 @@ function slimStudySessionForStorage(payload, { aggressive = false } = {}) {
     if (audio.audioUrl) delete audio.audioBase64;
     else delete clone.data.podcast.audio;
   }
-  if (clone.data?.sourceText?.length > 4000) {
-    clone.data.sourceText = clone.data.sourceText.slice(0, 4000);
+  if (clone.data?.sourceText?.length > 12000) {
+    clone.data.sourceText = clone.data.sourceText.slice(0, 12000);
+  }
+  if (clone.data?.originalText?.length > 12000) {
+    clone.data.originalText = clone.data.originalText.slice(0, 12000);
+  }
+  if (clone.data?.inputText?.length > 12000) {
+    clone.data.inputText = clone.data.inputText.slice(0, 12000);
   }
   if (aggressive && clone.data) {
-    delete clone.data.sourceText;
+    if (clone.data.sourceText?.length > 8000) {
+      clone.data.sourceText = clone.data.sourceText.slice(0, 8000);
+    }
+    if (clone.data.originalText?.length > 8000) {
+      clone.data.originalText = clone.data.originalText.slice(0, 8000);
+    }
+    if (clone.data.inputText?.length > 8000) {
+      clone.data.inputText = clone.data.inputText.slice(0, 8000);
+    }
     const podcast = clone.data.podcast;
     if (podcast?.script?.length > 20) podcast.script = podcast.script.slice(0, 20);
     if (podcast?.segments?.length > 8) podcast.segments = podcast.segments.slice(0, 8);
@@ -228,15 +320,65 @@ function slimStudySessionForStorage(payload, { aggressive = false } = {}) {
 }
 
 function slimSessionForDb(session) {
-  const clone = JSON.parse(JSON.stringify(session));
-  const audio = clone.podcast?.audio;
-  if (audio?.audioBase64 && audio?.audioUrl) delete audio.audioBase64;
-  if (clone.inputText?.length > 50000) clone.inputText = clone.inputText.slice(0, 50000);
-  if (clone.sourceText?.length > 50000) clone.sourceText = clone.sourceText.slice(0, 50000);
-  if (Array.isArray(clone.tutorChat) && clone.tutorChat.length > 40) {
-    clone.tutorChat = clone.tutorChat.slice(-40);
+  if (isInterviewSession(session)) return null;
+  const originalText = (session.originalText || session.sourceText || session.inputText || '').slice(0, 50000);
+  const inputText = (session.inputText || originalText).slice(0, 50000);
+  const flashcards = Array.isArray(session.flashcards) ? session.flashcards : [];
+  const quiz = session.quiz || null;
+  return {
+    id: session.id || session.sessionId || `session-${Date.now()}`,
+    name: session.name || 'Study session',
+    createdAt: session.createdAt || Date.now(),
+    source: session.source || session.notes?.source || '',
+    inputType: session.inputType || 'files',
+    inputText,
+    audioUrl: session.audioUrl || null,
+    notes: session.notes || null,
+    flashcards,
+    quiz,
+    sourceText: originalText,
+    originalText,
+    cardCount: flashcards.length,
+    quizCount: quiz?.questions?.length || 0
+  };
+}
+
+const STUDY_TAB_LABELS = {
+  original: 'Original source',
+  notes: 'Notes',
+  flashcards: 'Flashcards',
+  quiz: 'Quiz',
+  interview: 'Mock interview',
+  podcast: 'Podcast',
+  tutor: 'AI chat'
+};
+
+function studyTabLabel(tab, { pendingFlashcards = false, pendingQuiz = false } = {}) {
+  if (tab === 'flashcards' && pendingFlashcards) return 'Creating flashcards…';
+  if (tab === 'quiz' && pendingQuiz) return 'Generating quiz…';
+  return STUDY_TAB_LABELS[tab] || tab;
+}
+
+function studyTabLoadingHtml(tab, { pendingFlashcards = false, pendingQuiz = false } = {}) {
+  if (tab === 'flashcards' && pendingFlashcards) {
+    return '<p class="study-loading">Creating flashcards…</p>';
   }
-  return clone;
+  if (tab === 'quiz' && pendingQuiz) {
+    return '<p class="study-loading">Generating quiz…</p>';
+  }
+  return '';
+}
+
+function interviewLevelLabel(level) {
+  return ({ junior: 'Junior', mid: 'Mid-level', senior: 'Senior' })[level] || 'Mid-level';
+}
+
+function countInterviewQuestions(messages = []) {
+  return messages.filter((msg) => msg.kind === 'question').length;
+}
+
+function countInterviewFeedback(messages = []) {
+  return messages.filter((msg) => msg.kind === 'feedback').length;
 }
 
 function inputTypeFromMode(mode) {
@@ -244,6 +386,356 @@ function inputTypeFromMode(mode) {
   if (mode === 'url') return 'url';
   if (mode === 'text') return 'text';
   return 'files';
+}
+
+function isInterviewSession(session = {}) {
+  return session.inputType === 'interview' || Boolean(session._interviewOnly);
+}
+
+function resolveSessionUrl(session = {}) {
+  const fields = [
+    session.notes?.source,
+    session.source,
+    session.inputText,
+    session.originalText,
+    session.sourceText
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+
+  for (const value of fields) {
+    if (/^https?:\/\//i.test(value) && /youtube\.com|youtu\.be/i.test(value)) {
+      return value.match(/https?:\/\/[^\s<>"']+/i)?.[0] || value;
+    }
+  }
+
+  for (const value of fields) {
+    const match = value.match(/https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)[\w-]+|youtu\.be\/[\w-]+)[^\s<>"']*/i);
+    if (match) return match[0];
+  }
+
+  for (const value of fields) {
+    if (/^https?:\/\//i.test(value)) {
+      return value.match(/https?:\/\/[^\s<>"']+/i)?.[0] || value;
+    }
+  }
+
+  return null;
+}
+
+function describeSessionSource(session = {}) {
+  const inputType = session.inputType || 'files';
+  const rawSource = String(session.source || session.notes?.source || '').trim();
+  const inputText = String(session.inputText || session.sourceText || '').trim();
+  const audioUrl = session.audioUrl || null;
+  const sessionUrl = resolveSessionUrl(session);
+  const urlCandidate = inputType === 'url' ? (sessionUrl || inputText || rawSource) : sessionUrl;
+
+  if (inputType === 'interview') {
+    return {
+      kind: 'Mock interview',
+      detail: session.interviewRole || rawSource || session.name || 'Interview prep',
+      href: null
+    };
+  }
+  if (inputType === 'audio' || audioUrl) {
+    return {
+      kind: 'Audio',
+      detail: rawSource || 'Lecture recording',
+      href: audioUrl
+    };
+  }
+  if (inputType === 'text') {
+    const preview = inputText.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || rawSource || 'Pasted text';
+    return { kind: 'Text', detail: preview.slice(0, 100), href: null };
+  }
+  if (inputType === 'url' || sessionUrl || /^https?:\/\//i.test(rawSource) || /^https?:\/\//i.test(urlCandidate)) {
+    const href = sessionUrl || urlCandidate || rawSource;
+    const isYoutube = /youtube\.com|youtu\.be/i.test(href);
+    const youtubeId = isYoutube ? getYoutubeVideoId(href) : null;
+    let detail = rawSource && rawSource !== href ? rawSource : href;
+    const noteTitle = String(session.notes?.title || '').trim();
+    if (isYoutube && noteTitle && noteTitle !== 'Study session') detail = noteTitle;
+    return {
+      kind: isYoutube ? 'YouTube video' : 'Website',
+      detail: detail.slice(0, 120),
+      href,
+      youtubeId
+    };
+  }
+  return {
+    kind: 'Document',
+    detail: (rawSource || 'Uploaded file').slice(0, 120),
+    href: null
+  };
+}
+
+function getYoutubeVideoId(url) {
+  const value = String(url || '').trim();
+  const patterns = [
+    /youtu\.be\/([\w-]{11})/,
+    /youtube\.com\/watch\?v=([\w-]{11})/,
+    /youtube\.com\/embed\/([\w-]{11})/,
+    /youtube\.com\/shorts\/([\w-]{11})/
+  ];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+function youtubeEmbedSrc(videoId, autoplay = false) {
+  const params = new URLSearchParams({ rel: '0', modestbranding: '1', playsinline: '1' });
+  if (autoplay) params.set('autoplay', '1');
+  return `https://www.youtube-nocookie.com/embed/${videoId}?${params}`;
+}
+
+function renderYoutubeEmbedMarkup(videoId, title, escape, { visible = false } = {}) {
+  const safeTitle = escape(title || 'YouTube video');
+  const embedSrc = visible ? escape(youtubeEmbedSrc(videoId, false)) : '';
+  return `<div class="study-youtube-embed-wrap"${visible ? '' : ' hidden'}>
+    <iframe${embedSrc ? ` src="${embedSrc}"` : ''} title="${safeTitle}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy"></iframe>
+  </div>`;
+}
+
+function bindYoutubeSourceTriggers(container) {
+  if (!container) return;
+  container.querySelectorAll('.mg-session-youtube-trigger:not([data-bound])').forEach((trigger) => {
+    trigger.dataset.bound = '1';
+    const host = trigger.closest('.mg-session-origin-youtube, .study-original-youtube');
+    const wrap = host?.querySelector('.study-youtube-embed-wrap');
+    trigger.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (!wrap || !trigger.dataset.youtubeId) return;
+      const opening = wrap.hidden;
+      wrap.hidden = !opening;
+      trigger.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      const iframe = wrap.querySelector('iframe');
+      if (!iframe) return;
+      if (opening) iframe.src = youtubeEmbedSrc(trigger.dataset.youtubeId, true);
+      else iframe.removeAttribute('src');
+    });
+  });
+}
+
+function renderSessionSourceMarkup(session, { escape = escapeDashboardText } = {}) {
+  const { kind, detail, href, youtubeId } = describeSessionSource(session);
+  const safeDetail = escape(detail);
+  if (youtubeId) {
+    return `<div class="mg-session-origin-row mg-session-origin-youtube">
+      <span class="mg-session-source">${escape(kind)}</span>
+      <button type="button" class="mg-session-origin-link mg-session-youtube-trigger" data-youtube-id="${escape(youtubeId)}" aria-expanded="false">${safeDetail}</button>
+      ${renderYoutubeEmbedMarkup(youtubeId, detail, escape)}
+    </div>`;
+  }
+  const safeHref = href && (/^https?:\/\//i.test(href) || href.startsWith('/')) ? href : null;
+  const detailHtml = safeHref
+    ? `<a class="mg-session-origin-link" href="${escape(safeHref)}" target="_blank" rel="noopener noreferrer">${safeDetail}</a>`
+    : `<span class="mg-session-origin-text">${safeDetail}</span>`;
+  return `<div class="mg-session-origin-row"><span class="mg-session-source">${escape(kind)}</span>${detailHtml}</div>`;
+}
+
+function buildClientSourceMeta(mode, { files = [], text = '', url = '' } = {}) {
+  const inputType = inputTypeFromMode(mode);
+  const meta = { inputType };
+  if (mode === 'text') {
+    const pasted = String(text || '').trim();
+    if (pasted) {
+      meta.inputText = pasted;
+      meta.originalText = pasted;
+      meta.sourceText = pasted;
+      const line = pasted.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+      meta.source = line ? line.slice(0, 120) : 'Pasted text';
+    }
+  } else if (mode === 'url') {
+    const link = String(url || '').trim();
+    if (link) {
+      meta.inputText = link;
+      meta.source = link;
+    }
+  } else if (mode === 'audio' || mode === 'files') {
+    const names = files.map((file) => file.name).filter(Boolean);
+    if (names.length) {
+      meta.source = names.join(', ');
+      meta.sourceFiles = names;
+    }
+  }
+  return meta;
+}
+
+function mergeStudySessionPayload(serverData = {}, clientMeta = {}) {
+  const merged = { ...clientMeta, ...serverData };
+  merged.inputText = String(serverData.inputText || clientMeta.inputText || '').trim()
+    || String(clientMeta.inputText || '').trim();
+  merged.source = String(serverData.source || clientMeta.source || serverData.notes?.source || '').trim()
+    || String(clientMeta.source || '').trim();
+  merged.originalText = String(serverData.originalText || clientMeta.originalText || merged.inputText || '').trim();
+  merged.sourceText = String(serverData.sourceText || clientMeta.sourceText || '').trim();
+  if (!merged.sourceFiles?.length && clientMeta.sourceFiles?.length) {
+    merged.sourceFiles = clientMeta.sourceFiles;
+  }
+  if (!merged.inputType && clientMeta.inputType) merged.inputType = clientMeta.inputType;
+  return merged;
+}
+
+function getOriginalText(session = {}) {
+  return String(session.originalText || session.inputText || '').trim();
+}
+
+function fixOriginalLatex(text) {
+  return String(text || '')
+    .replace(/\\r\\right/g, '\\right')
+    .replace(/\\r\)/g, '\\right)')
+    .replace(/\\r\\right\)/g, '\\right)')
+    .replace(/\\ight\)/g, '\\right)')
+    .replace(/\\ight\}/g, '\\right}')
+    .replace(/ight\)_/g, '\\right)_')
+    .replace(/\\left\(\s*\\frac\{\\bar\{d\}Q\}/g, '\\left(\\frac{\\bar{d}Q}');
+}
+
+function cleanStrayMarkdown(text) {
+  return String(text || '')
+    .replace(/\*\*Topic:\s*/gi, 'Topic: ')
+    .replace(/Topic:\s*\*\*\s*/gi, 'Topic: ')
+    .replace(/Topic:\s*\*\*(?=\s*[A-Za-z])/gi, 'Topic: ')
+    .replace(/(^|[.\s])\*\*\s+(?=[A-Za-z])/gm, '$1')
+    .replace(/\s+\*\*(?=[.,;])/g, '')
+    .replace(/\*\*(?=[.,;])/g, '')
+    .replace(/^\*\*\s*/gm, '')
+    .replace(/\s*\*\*\s*$/gm, '')
+    .replace(/\*\*/g, '');
+}
+
+function dedupeExtractedSymbols(text) {
+  let t = String(text || '');
+  t = t.replace(/\b([A-Za-z])\s+\1\b/g, '$1');
+  t = t.replace(/\)_([A-Za-z])\s*\n+\1(?![A-Za-z_{])/g, ')_$1');
+  t = t.replace(/(\\right\)_([A-Za-z]))(?:\s|\n+)\2\b/g, '$1');
+  t = t.replace(/\$([^$]+)\$\s+\1\b/g, '$$$1$');
+  t = t.replace(/([A-Za-z])\n\1(?=[\s,.\n]|$)/g, '$1');
+  return t;
+}
+
+function prepareOriginalTextForDisplay(text) {
+  let t = String(text || '').replace(/\r\n/g, '\n');
+  t = t.replace(/([a-zA-Z])\u0304/g, '\\bar{$1}');
+  t = fixOriginalLatex(t);
+  t = cleanStrayMarkdown(t);
+  t = dedupeExtractedSymbols(t);
+  t = t.replace(/\s+(?=Topic:\s)/gi, '\n\n');
+  t = t.replace(/Topic:\s*/gi, 'Topic: ');
+  t = t.replace(/[ \t]+/g, ' ');
+  t = t.replace(/\n{3,}/g, '\n\n');
+  return t.trim();
+}
+
+function splitOriginalSections(text) {
+  const parts = String(text).split(/(?=Topic:\s)/i).map((part) => part.trim()).filter(Boolean);
+  return parts.length ? parts : [text];
+}
+
+function parseOriginalTopicSection(block) {
+  const chunk = cleanStrayMarkdown(String(block)).trim();
+  const match = chunk.match(/^Topic:\s*(.+?)\.\s*(.*)$/is);
+  if (!match) return { title: null, body: chunk };
+  return {
+    title: match[1].trim().replace(/\*\*/g, '').trim(),
+    body: match[2].trim()
+  };
+}
+
+function wrapOriginalMathSegments(text) {
+  let t = fixOriginalLatex(String(text || ''));
+  const wrap = (expr) => {
+    const trimmed = expr.trim();
+    if (!trimmed || trimmed.startsWith('$')) return trimmed;
+    return `$${trimmed}$`;
+  };
+
+  t = t.replace(/\\left\([\s\S]*?\\right\)(?:_\{[^}]+\}|_[A-Za-z0-9]+)?/g, (m) => wrap(m));
+  t = t.replace(/(?<!\$)(\\partial[^.,;\n]{0,60})/g, (m) => wrap(m));
+  t = t.replace(/(?<!\$)\b([A-Za-z])_([A-Za-z0-9]+)\b(?!\$)/g, (_, a, b) => `$${a}_${b}$`);
+  return t;
+}
+
+function renderOriginalRichText(text) {
+  const prepared = prepareOriginalTextForDisplay(text);
+  if (!prepared) return '';
+  const sections = splitOriginalSections(prepared);
+  const hasTopics = sections.length > 1 || /^Topic:\s/i.test(sections[0]);
+
+  if (!hasTopics) {
+    const body = wrapOriginalMathSegments(prepared);
+    return `<div class="study-original-body"><div class="study-original-block study-rich-text">${formatStudyInline(body)}</div></div>`;
+  }
+
+  return `<div class="study-original-body">${sections.map((block) => {
+    const { title, body } = parseOriginalTopicSection(block);
+    if (title) {
+      const topicBody = wrapOriginalMathSegments(body || '');
+      return `<article class="study-original-topic">
+        <h4 class="study-original-topic-title">Topic: ${escHtml(title)}.</h4>
+        <div class="study-original-topic-body study-rich-text">${formatStudyInline(topicBody)}</div>
+      </article>`;
+    }
+    return `<div class="study-original-block study-rich-text">${formatStudyInline(wrapOriginalMathSegments(block))}</div>`;
+  }).join('')}</div>`;
+}
+
+function hasOriginalStudyContent(session = {}) {
+  if (session.inputType === 'interview' || session._interviewOnly) return false;
+  const text = getOriginalText(session);
+  const audioUrl = session.audioUrl || null;
+  const sourceLabel = String(session.source || session.notes?.source || '').trim();
+  const source = describeSessionSource(session);
+  return Boolean(text || audioUrl || sourceLabel || source.detail);
+}
+
+function renderOriginalPanel(container, sessionData = {}, { escape = (t) => String(t ?? '') } = {}) {
+  if (!container) return;
+  const source = describeSessionSource(sessionData);
+  const originalText = getOriginalText(sessionData);
+  const audioUrl = sessionData.audioUrl || null;
+  const fileLabel = String(sessionData.source || source.detail || '').trim();
+  const sessionUrl = resolveSessionUrl(sessionData);
+  const safeHref = source.href && (/^https?:\/\//i.test(source.href) || source.href.startsWith('/'))
+    ? source.href
+    : (sessionUrl && /^https?:\/\//i.test(sessionUrl) ? sessionUrl : null);
+  const youtubeId = source.youtubeId || (safeHref ? getYoutubeVideoId(safeHref) : null);
+  let body = '';
+
+  if (audioUrl) {
+    if (fileLabel) {
+      body += `<p class="study-original-file"><strong>Source:</strong> ${escape(fileLabel)}</p>`;
+    }
+    body += `<audio controls src="${escape(audioUrl)}" class="study-original-audio" preload="metadata"></audio>`;
+  } else if (youtubeId) {
+    body = `<div class="study-original-youtube study-original-youtube-only">
+      ${renderYoutubeEmbedMarkup(youtubeId, source.detail || safeHref, escape, { visible: true })}
+    </div>`;
+  } else if ((sessionData.inputType === 'url' || sessionUrl) && safeHref) {
+    body = `<p class="study-original-link"><a href="${escape(safeHref)}" target="_blank" rel="noopener noreferrer">${escape(source.detail || safeHref)}</a></p>`;
+    if (originalText && originalText !== safeHref) {
+      body += renderOriginalRichText(originalText);
+    }
+  } else if (originalText) {
+    if (fileLabel && sessionData.inputType !== 'text') {
+      body += `<p class="study-original-file"><strong>Source:</strong> ${escape(fileLabel)}</p>`;
+    }
+    body += renderOriginalRichText(originalText);
+  } else if (fileLabel) {
+    body += `<p class="study-original-file"><strong>Source:</strong> ${escape(fileLabel)}</p>`;
+  } else {
+    body = `<p class="study-result-meta">${escape(source.detail || 'No original content saved.')}</p>`;
+  }
+
+  container.innerHTML = `
+    <div class="study-original-panel${youtubeId ? ' study-original-panel-youtube' : ''}">
+      <h3 class="study-original-title">Original source</h3>
+      ${youtubeId ? '' : `<p class="study-result-meta study-original-meta">${escape(source.kind)}${source.detail ? ` · ${escape(source.detail)}` : ''}</p>`}
+      ${body}
+    </div>`;
+  bindYoutubeSourceTriggers(container);
+  typesetRichContent(container);
 }
 
 function setPendingStudy(payload) {
@@ -509,27 +1001,28 @@ function renderSolverResult(container, data) {
   }
   const solution = data.solution || {};
   const givenList = (solution.given || []).length
-    ? `<ul class="study-solver-given-list">${solution.given.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>`
+    ? `<ul class="study-solver-given-list">${solution.given.map((item) => `<li class="study-rich-text">${formatStudyInline(item)}</li>`).join('')}</ul>`
     : '';
   const steps = (solution.steps || []).map((step) => `
     <div class="study-step">
-      <strong>Step ${step.step}: ${esc(step.title)}</strong>
-      <p>${esc(step.detail)}</p>
+      <strong>Step ${step.step}: ${formatStudyInline(step.title)}</strong>
+      <p class="study-rich-text">${formatStudyInline(step.detail)}</p>
     </div>`).join('');
   container.innerHTML = `
     <div class="study-solver-card">
       <div class="study-solver-head">
-        <h4>${esc(solution.title || 'Solution')}</h4>
+        <h4 class="study-rich-text">${formatStudyInline(solution.title || 'Solution')}</h4>
       </div>
-      ${solution.question ? `<div class="study-solver-block"><span class="study-solver-label">Question</span><p>${esc(solution.question)}</p></div>` : ''}
+      ${solution.question ? `<div class="study-solver-block"><span class="study-solver-label">Question</span><p class="study-rich-text">${formatStudyInline(solution.question)}</p></div>` : ''}
       ${givenList ? `<div class="study-solver-block"><span class="study-solver-label">Given</span>${givenList}</div>` : ''}
-      ${solution.formula ? `<div class="study-solver-block"><span class="study-solver-label">Formula</span><p class="study-solver-formula">${esc(solution.formula)}</p></div>` : ''}
+      ${solution.formula ? `<div class="study-solver-block"><span class="study-solver-label">Formula</span><p class="study-solver-formula study-rich-text">${formatStudyInline(solution.formula)}</p></div>` : ''}
       ${steps ? `<div class="study-solver-block"><span class="study-solver-label">Steps</span><div class="study-solver-steps">${steps}</div></div>` : ''}
       <div class="study-solver-answer">
         <span class="study-solver-answer-label">Final answer</span>
-        <strong class="study-solver-answer-value">${esc(solution.answer || 'See steps above')}</strong>
+        <strong class="study-solver-answer-value study-rich-text">${formatStudyInline(solution.answer || 'See steps above')}</strong>
       </div>
     </div>`;
+  typesetRichContent(container);
 }
 
 async function problemTextFromFiles(files) {
@@ -740,8 +1233,6 @@ async function loadPodcastAudio(container, podcast, fetchId) {
 }
 
 function renderPodcastResult(container, data) {
-  const esc = (t) => String(t ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const podcast = data.podcast || data;
   const fetchId = ++podcastAudioFetchId;
   const hosts = podcast.hosts || ['Alex', 'Sam'];
@@ -750,11 +1241,12 @@ function renderPodcastResult(container, data) {
   const hasAudio = podcast.audio?.audioUrl || podcast.audio?.audioBase64;
   const segments = podcast.segments || [];
   const script = podcast.script || [];
+  const rich = (text) => formatStudyInline(text);
 
   container.innerHTML = `
-    <h3 class="study-podcast-title">${esc(podcast.title || 'Study podcast')}</h3>
-    <p class="study-result-meta study-podcast-meta">${esc(podcast.duration || '—')} · ${esc(podcast.styleLabel || podcast.style || 'Conversational')} · Hosts: ${esc(hosts.join(' & '))}</p>
-    ${podcast.description ? `<p class="study-podcast-desc">${esc(podcast.description)}</p>` : ''}
+    <h3 class="study-podcast-title study-rich-text">${rich(podcast.title || 'Study podcast')}</h3>
+    <p class="study-result-meta study-podcast-meta">${formatStudyInline(podcast.duration || '—')} · ${formatStudyInline(podcast.styleLabel || podcast.style || 'Conversational')} · Hosts: ${formatStudyInline(hosts.join(' & '))}</p>
+    ${podcast.description ? `<p class="study-podcast-desc study-rich-text">${rich(podcast.description)}</p>` : ''}
     <div class="study-podcast-audio-minimal" id="podcast-audio-wrap">
       <button type="button" class="button button-primary study-podcast-play-btn" id="podcast-play-btn" aria-label="Play podcast">
         <svg class="study-podcast-play-icon" id="podcast-play-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
@@ -768,9 +1260,9 @@ function renderPodcastResult(container, data) {
         <h5>Chapters</h5>
         ${segments.map((s) => `
           <div class="study-podcast-segment">
-            <span class="study-podcast-time">${esc(s.time || '')}</span>
-            <strong>${esc(s.title || '')}</strong>
-            ${s.summary ? `<p>${esc(s.summary)}</p>` : ''}
+            <span class="study-podcast-time">${formatStudyInline(s.time || '')}</span>
+            <strong class="study-rich-text">${rich(s.title || '')}</strong>
+            ${s.summary ? `<p class="study-rich-text">${rich(s.summary)}</p>` : ''}
           </div>`).join('')}
       </div>` : ''}
     ${script.length ? `
@@ -778,9 +1270,11 @@ function renderPodcastResult(container, data) {
         <h5>Script</h5>
         ${script.map((line) => {
           const isGirl = line.speaker === girl || line.speaker === 'Sam';
-          return `<div class="study-podcast-line study-podcast-line-${isGirl ? 'female' : 'male'}"><strong>${esc(line.speaker || boy)}:</strong><p>${esc(line.text)}</p></div>`;
+          return `<div class="study-podcast-line study-podcast-line-${isGirl ? 'female' : 'male'}"><strong>${formatStudyInline(line.speaker || boy)}:</strong><p class="study-rich-text">${rich(line.text)}</p></div>`;
         }).join('')}
       </div>` : ''}`;
+
+  typesetRichContent(container);
 
   const wrap = container.querySelector('#podcast-audio-wrap');
   wrap._podcastRef = podcast;
@@ -796,24 +1290,40 @@ function renderPodcastResult(container, data) {
   }
 }
 
+function readPodcastStyle(prefix = 'dash-') {
+  const el = document.getElementById(`${prefix}podcast-style`)
+    || document.getElementById('dash-podcast-style');
+  const style = String(el?.value || 'conversational').toLowerCase();
+  return ['conversational', 'lecture', 'interview', 'practice'].includes(style) ? style : 'conversational';
+}
+
+const STANDARD_STUDY_GENERATE = Object.freeze({
+  notes: true,
+  flashcards: true,
+  quiz: true,
+  podcast: false
+});
+
 function readGenerateOptions(prefix) {
   const pick = (suffix) =>
     document.getElementById(`${prefix}${suffix}`) || document.getElementById(`dash-${suffix}`);
   const notes = pick('gen-notes');
   const flashcards = pick('gen-flashcards');
   const quiz = pick('gen-quiz');
-  const podcast = pick('gen-podcast');
   return {
     notes: notes ? notes.checked : true,
     flashcards: flashcards ? flashcards.checked : true,
     quiz: quiz ? quiz.checked : true,
-    podcast: podcast ? podcast.checked : true
+    podcast: false
   };
 }
 
 function validateGenerateOptions(generate) {
   if (!generate.notes && !generate.flashcards && !generate.quiz && !generate.podcast) {
     throw new Error('Select at least one: Notes, Flashcards, Quiz, or Podcast.');
+  }
+  if (generate.notes || generate.flashcards || generate.quiz) {
+    return { ...generate, podcast: false };
   }
   return generate;
 }
@@ -868,24 +1378,39 @@ function resolveSessionTitle(userName, data, mode, sourceFiles = []) {
   return `Study session — ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
 }
 
+function isPodcastOnlyGenerate(generate) {
+  const gen = generate || {};
+  return Boolean(gen.podcast && !gen.notes && !gen.flashcards && !gen.quiz);
+}
+
+function studySessionTimeoutMs(generate, { hasFiles = false } = {}) {
+  if (isPodcastOnlyGenerate(generate)) return hasFiles ? 240000 : 180000;
+  if (hasFiles) return 180000;
+  if (generate?.podcast) return 150000;
+  return 90000;
+}
+
 function loadingMessagesForGenerate(generate, activeMode = 'files') {
   const msgs = [];
   if (activeMode === 'audio') msgs.push('Transcribing your audio…');
   else if (activeMode === 'url') msgs.push('Fetching your link…');
   else msgs.push('Reading your content…');
   if (generate.notes) msgs.push('Writing smart notes…');
-  if (generate.flashcards) msgs.push('Building flashcards…');
-  if (generate.quiz) msgs.push('Building quiz…');
-  if (generate.podcast) msgs.push('Creating podcast voices…');
+  if (generate.flashcards) msgs.push('Creating flashcards…');
+  if (generate.quiz) msgs.push('Generating quiz…');
+  if (isPodcastOnlyGenerate(generate)) msgs.push('Creating podcast script…', 'Creating Gemini AI voices…');
+  else if (generate.podcast) msgs.push('Creating podcast voices…');
   return msgs.length ? msgs : ['Working on your session…'];
 }
 
-async function createStudySession({ files = [], text = '', url = '', urlType = '', sessionName = '', generate = null }) {
-  const gen = generate || { notes: true, flashcards: true, quiz: true, podcast: true };
+async function createStudySession({ files = [], text = '', url = '', urlType = '', sessionName = '', generate = null, podcastStyle = null, timeoutMs = null }) {
+  const gen = generate || { notes: true, flashcards: true, quiz: true, podcast: false };
+  const style = podcastStyle || readPodcastStyle('dash-');
+  const requestTimeoutMs = timeoutMs || studySessionTimeoutMs(gen, { hasFiles: files.length > 0 });
 
   if (url) {
     const controller = new AbortController();
-    const timeoutMs = 90000;
+    const timeoutMs = requestTimeoutMs;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch('/api/study/url', {
@@ -895,7 +1420,8 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
           url,
           ...(urlType ? { urlType } : {}),
           ...(sessionName ? { sessionName } : {}),
-          generate: gen
+          generate: gen,
+          podcastStyle: style
         }),
         signal: controller.signal
       });
@@ -915,10 +1441,10 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
   if (text) fd.append('text', text);
   if (sessionName) fd.append('sessionName', sessionName);
   fd.append('generate', JSON.stringify(gen));
+  fd.append('podcastStyle', style);
 
   const controller = new AbortController();
-  const timeoutMs = 90000;
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
 
   try {
     const res = await fetch('/api/study', {
@@ -930,12 +1456,118 @@ async function createStudySession({ files = [], text = '', url = '', urlType = '
     return parseApiResponse(res);
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error('Generation timed out. Try a shorter file, paste text, or turn off podcast.');
+      throw new Error(isPodcastOnlyGenerate(gen)
+        ? 'Podcast generation timed out. Try a shorter file or paste text instead.'
+        : 'Generation timed out. Try a shorter file, paste text, or turn off podcast.');
     }
     throw err;
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function createPodcastOnlySession(params, { onProgress, onPartial } = {}) {
+  const gen = { notes: false, flashcards: false, quiz: false, podcast: true };
+  onProgress?.('Reading your content…', 15);
+
+  const data = await createStudySession({ ...params, generate: gen });
+  onProgress?.('Creating podcast script…', 55);
+
+  const emitPartial = (extra = {}) => {
+    if (!onPartial) return;
+    const merged = { ...data, ...extra };
+    onPartial({
+      ...merged,
+      _pendingPodcast: Boolean(
+        extra._pendingPodcast ?? !(merged.podcast?.audio?.audioUrl || merged.podcast?.audio?.audioBase64)
+      )
+    });
+  };
+
+  emitPartial({ _pendingPodcast: !(data.podcast?.audio?.audioUrl || data.podcast?.audio?.audioBase64) });
+
+  if (data.podcast?.script?.length && !data.podcast?.audio?.audioUrl && !data.podcast?.audio?.audioBase64) {
+    onProgress?.('Creating Gemini AI voices…', 75);
+    try {
+      const audioData = await fetchStudyStage('/api/podcast/audio', {
+        podcast: data.podcast
+      }, 240000);
+      if (audioData.podcast) data.podcast = audioData.podcast;
+      else if (audioData.audio) data.podcast = { ...data.podcast, audio: audioData.audio };
+      emitPartial({ podcast: data.podcast, _pendingPodcast: false });
+      onProgress?.('All set!', 100);
+    } catch (err) {
+      data._podcastAudioError = err.message;
+      emitPartial({ podcast: data.podcast, _pendingPodcast: false });
+      onProgress?.('Podcast script ready', 100);
+    }
+  } else {
+    onProgress?.('All set!', 100);
+  }
+
+  return data;
+}
+
+function shouldRegenerateSavedExtras(session = {}) {
+  if (isInterviewSession(session)) return false;
+  if (session.inputType === 'interview') return false;
+  const hasNotes = (session.notes?.bullets || []).length > 0;
+  const hasOriginal = Boolean(
+    String(session.originalText || session.sourceText || session.inputText || '').trim()
+  );
+  return hasNotes || hasOriginal;
+}
+
+async function regenerateStudyExtras(sessionData, sessionTitle, mode, applySession, { flashcards = false, quiz = false } = {}) {
+  if (!shouldRegenerateSavedExtras(sessionData)) return sessionData;
+
+  const params = { text: sessionData.inputText || '' };
+  const studySourceText = () => buildStudySourceText(sessionData, params);
+
+  if (flashcards) {
+    sessionData._pendingFlashcards = true;
+    delete sessionData._flashcardsError;
+    await applySession(sessionTitle, sessionData, mode, { save: false, partial: true });
+    try {
+      const cardsData = await fetchStudyStage('/api/study/flashcards', {
+        sourceText: studySourceText(),
+        text: params.text,
+        notes: sessionData.notes || {}
+      });
+      sessionData.flashcards = cardsData.flashcards || [];
+      sessionData._pendingFlashcards = false;
+    } catch (err) {
+      sessionData._flashcardsError = err.message;
+      sessionData._pendingFlashcards = false;
+      sessionData.flashcards = [];
+    }
+    await applySession(sessionTitle, sessionData, mode, { save: false, partial: !quiz });
+  }
+
+  if (quiz) {
+    sessionData._pendingQuiz = true;
+    delete sessionData._quizError;
+    if (!flashcards) {
+      await applySession(sessionTitle, sessionData, mode, { save: false, partial: true });
+    }
+    try {
+      const quizSource = studySourceText();
+      if (!quizSource) throw new Error('No study material available for quiz generation.');
+      const quizData = await fetchStudyStage('/api/study/quiz', {
+        sourceText: quizSource,
+        text: params.text,
+        notes: sessionData.notes || {}
+      }, 120000);
+      sessionData.quiz = quizData.quiz || { title: 'Practice quiz', questions: [] };
+      sessionData._pendingQuiz = false;
+    } catch (err) {
+      sessionData._quizError = err.message;
+      sessionData._pendingQuiz = false;
+      sessionData.quiz = { title: 'Practice quiz', questions: [] };
+    }
+  }
+
+  return sessionData;
 }
 
 function buildStudySourceText(data = {}, params = {}) {
@@ -969,12 +1601,15 @@ async function fetchStudyStage(path, body, timeoutMs = 90000) {
   }
 }
 
-/** Generate in stages so notes appear quickly; flashcards and podcast load after. */
+/** Generate in stages so notes appear quickly; flashcards and quiz load after. */
 async function createStudySessionStaged(params, { onProgress, onPartial } = {}) {
-  const gen = params.generate || { notes: true, flashcards: true, quiz: true, podcast: true };
-  const outputCount = [gen.notes, gen.flashcards, gen.quiz, gen.podcast].filter(Boolean).length;
+  const gen = params.generate || { notes: true, flashcards: true, quiz: true, podcast: false };
+  if (isPodcastOnlyGenerate(gen)) {
+    return createPodcastOnlySession(params, { onProgress, onPartial });
+  }
+  const outputCount = [gen.notes, gen.flashcards, gen.quiz].filter(Boolean).length;
   if (outputCount <= 1) {
-    return createStudySession(params);
+    return createStudySession({ ...params, generate: { ...gen, podcast: false } });
   }
 
   const stage1Gen = {
@@ -986,7 +1621,7 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
 
   onProgress?.(params.url ? 'Fetching your link…' : gen.notes ? 'Writing smart notes…' : 'Building flashcards…', 15);
   const data = await createStudySession({ ...params, generate: stage1Gen });
-  onProgress?.('Notes ready', gen.flashcards || gen.quiz || gen.podcast ? 42 : 100);
+  onProgress?.('Notes ready', gen.flashcards || gen.quiz ? 42 : 100);
 
   const emitPartial = (extra = {}) => {
     if (!onPartial) return;
@@ -994,8 +1629,7 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
     onPartial({
       ...merged,
       _pendingFlashcards: gen.flashcards && !stage1Gen.flashcards && !(merged.flashcards || []).length,
-      _pendingQuiz: gen.quiz && !stage1Gen.quiz && !(merged.quiz?.questions?.length),
-      _pendingPodcast: gen.podcast && !(merged.podcast?.script?.length || merged.podcast?.title)
+      _pendingQuiz: gen.quiz && !stage1Gen.quiz && !(merged.quiz?.questions?.length)
     });
   };
 
@@ -1008,7 +1642,7 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
   const studySourceText = () => buildStudySourceText(data, params);
 
   if (gen.flashcards && !stage1Gen.flashcards) {
-    onProgress?.('Building detailed flashcards…', 55);
+    onProgress?.('Creating flashcards…', 55);
     try {
       const cardsData = await fetchStudyStage('/api/study/flashcards', {
         sourceText: studySourceText(),
@@ -1018,16 +1652,16 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
       data.flashcards = cardsData.flashcards || [];
       if (cardsData.usedMockFallback) data.usedMockFallback = true;
       emitPartial({ flashcards: data.flashcards, _pendingFlashcards: false });
-      onProgress?.('Flashcards ready', gen.quiz || gen.podcast ? 68 : 100);
+      onProgress?.('Flashcards ready', gen.quiz ? 68 : 100);
     } catch (err) {
       data._flashcardsError = err.message;
       emitPartial({ _pendingFlashcards: false });
-      onProgress?.('Flashcards skipped', gen.quiz || gen.podcast ? 68 : 100);
+      onProgress?.('Flashcards skipped', gen.quiz ? 68 : 100);
     }
   }
 
   if (gen.quiz && !stage1Gen.quiz) {
-    onProgress?.('Building detailed quiz…', 72);
+    onProgress?.('Generating quiz…', 72);
     try {
       const quizSource = studySourceText();
       if (!quizSource) {
@@ -1044,41 +1678,11 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
         throw new Error('Quiz returned no questions. Try again or use shorter material.');
       }
       emitPartial({ quiz: data.quiz, _pendingQuiz: false });
-      onProgress?.('Quiz ready', gen.podcast ? 82 : 100);
+      onProgress?.('Quiz ready', 100);
     } catch (err) {
       data._quizError = err.message;
       emitPartial({ quiz: data.quiz || { title: 'Practice quiz', questions: [] }, _pendingQuiz: false });
-      onProgress?.('Quiz skipped', gen.podcast ? 82 : 100);
-    }
-  }
-
-  if (gen.podcast) {
-    onProgress?.('Creating podcast script…', 85);
-    try {
-      const podData = await fetchStudyStage('/api/podcast', {
-        text: data.sourceText || params.text || '',
-        title: data.notes?.title || 'Study podcast',
-        style: 'conversational'
-      });
-      data.podcast = podData.podcast || {};
-      emitPartial({ podcast: data.podcast, _pendingPodcast: true });
-      onProgress?.('Creating Gemini AI voices…', 92);
-      try {
-        const audioData = await fetchStudyStage('/api/podcast/audio', {
-          podcast: data.podcast
-        }, 180000);
-        if (audioData.podcast) data.podcast = audioData.podcast;
-        else if (audioData.audio) data.podcast.audio = audioData.audio;
-        emitPartial({ podcast: data.podcast, _pendingPodcast: false });
-      } catch (audioErr) {
-        data._podcastAudioError = audioErr.message;
-        emitPartial({ podcast: data.podcast, _pendingPodcast: false });
-      }
-      onProgress?.('All set!', 100);
-    } catch (err) {
-      data._podcastError = err.message;
-      emitPartial({ _pendingPodcast: false });
-      onProgress?.('All set!', 100);
+      onProgress?.('Quiz skipped', 100);
     }
   } else {
     onProgress?.('All set!', 100);
@@ -1086,7 +1690,6 @@ async function createStudySessionStaged(params, { onProgress, onPartial } = {}) 
 
   delete data._pendingFlashcards;
   delete data._pendingQuiz;
-  delete data._pendingPodcast;
   return data;
 }
 
@@ -1095,6 +1698,15 @@ async function sendTutorMessage(message, context = '') {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, context })
+  });
+  return parseApiResponse(res);
+}
+
+async function sendInterviewTurn(payload = {}) {
+  const res = await fetch('/api/interview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
   });
   return parseApiResponse(res);
 }
@@ -1340,6 +1952,7 @@ function initAppSidebar() {
 
   function showDashPanel(key) {
     exitDashboardStudyView();
+    setSidebarUploadSelection(null);
     dashPanels.forEach((panel) => {
       panel.hidden = panel.dataset.dashPanel !== key;
     });
@@ -1517,7 +2130,9 @@ async function deleteFolder(id) {
 }
 
 async function saveStudySessionToDb(session) {
+  if (isInterviewSession(session)) return null;
   const payload = slimSessionForDb(session);
+  if (!payload) return null;
   if (await checkDatabase()) {
     try {
       const { session: saved } = await apiDataFetch('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
@@ -1585,10 +2200,13 @@ function getStudySessionsFromCache() {
 }
 
 function upsertSessionCache(session) {
+  if (isInterviewSession(session)) return;
+  const slim = slimSessionForDb(session);
+  if (!slim) return;
   const list = getStudySessionsFromCache().slice();
-  const idx = list.findIndex((s) => s.id === session.id);
-  if (idx >= 0) list[idx] = session;
-  else list.unshift(session);
+  const idx = list.findIndex((s) => s.id === slim.id);
+  if (idx >= 0) list[idx] = slim;
+  else list.unshift(slim);
   _sessionsCache = list.slice(0, 50);
   try {
     localStorage.setItem(userDataKey('sessions'), JSON.stringify(_sessionsCache));
@@ -1807,12 +2425,18 @@ document.addEventListener('DOMContentLoaded', ()=>{
   }
 
   function getStudySessions() {
-    return getStudySessionsFromCache();
+    return getStudySessionsFromCache().filter((s) => !isInterviewSession(s));
   }
 
   function renderSessions() {
     if (!sessionsEl) return;
-    const sessions = getStudySessions().filter((s) => matchesQuery(s.name) || matchesQuery(s.source));
+    const sessions = getStudySessions().filter((s) => {
+      const source = describeSessionSource(s);
+      return matchesQuery(s.name)
+        || matchesQuery(s.source)
+        || matchesQuery(source.detail)
+        || matchesQuery(source.kind);
+    });
     if (sessionsPanelCountEl) sessionsPanelCountEl.textContent = getStudySessions().length;
     if (sessionCountEl) sessionCountEl.textContent = getStudySessions().length;
 
@@ -1831,10 +2455,14 @@ document.addEventListener('DOMContentLoaded', ()=>{
     sessionsEl.innerHTML = sessions.slice(0, 12).map((session) => {
       const date = new Date(session.createdAt);
       const dateLabel = formatSessionDate(date);
+      const sourceMarkup = renderSessionSourceMarkup(session);
 
       return `
       <article class="mg-session-row">
-        <h3 class="mg-session-title">${escapeDashboardText(session.name)}</h3>
+        <div class="mg-session-copy">
+          ${sourceMarkup}
+          <h3 class="mg-session-title">${escapeDashboardText(session.name)}</h3>
+        </div>
         <time class="mg-session-date" datetime="${date.toISOString()}">${dateLabel}</time>
         <div class="mg-session-actions">
           <a class="button button-soft button-sm mg-session-open" href="dashboard.html?session=${encodeURIComponent(session.id)}">Open</a>
@@ -2037,6 +2665,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const audioUploadBox = document.getElementById('dash-audio-upload-box');
   const youtubeUrlInput = document.getElementById('dash-youtube-url');
   const websiteUrlInput = document.getElementById('dash-website-url');
+  const interviewRoleInput = document.getElementById('dash-interview-role-input');
+  const interviewLevelInput = document.getElementById('dash-interview-level-input');
+  const interviewTypeInput = document.getElementById('dash-interview-type-input');
+  const generateOptionsEl = document.querySelector('#dash-session-modal .study-generate-options');
+  const sessionNameWrap = document.getElementById('dash-session-name-wrap');
+  const modalBody = modal.querySelector('.dash-session-modal-body');
+  const interviewPanel = modal.querySelector('[data-dash-mode-panel="interview"]');
+  const podcastPanel = modal.querySelector('[data-dash-mode-panel="podcast"]');
+  const podcastTextInput = document.getElementById('dash-podcast-text');
+  const podcastSourceTabs = document.getElementById('dash-podcast-source-tabs');
+  const podcastFileInput = document.getElementById('dash-podcast-file-input');
+  const podcastFileTrigger = document.getElementById('dash-podcast-file-trigger');
+  const podcastDropZone = document.getElementById('dash-podcast-drop-zone');
+  const podcastFileListEl = document.getElementById('dash-podcast-file-list');
+  const practiceTextInput = document.getElementById('dash-practice-text');
   const inputTabs = document.getElementById('dash-input-tabs');
   const materialsSection = document.getElementById('dash-materials-section');
   const pasteTextInput = document.getElementById('dash-paste-text');
@@ -2051,6 +2694,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let recordedBlob = null;
   let recordTimerId = null;
   let recordStartTime = 0;
+  let podcastSource = 'files';
+  let podcastSelectedFiles = [];
 
   const MODE_CONFIG = {
     materials: {
@@ -2061,7 +2706,8 @@ document.addEventListener('DOMContentLoaded', () => {
       desc: 'Add PDFs, Word docs, images, slides, and sheets',
       icon: '📚',
       dropTitle: 'Drop files or click to upload',
-      dropHint: 'PDF · Word · Images · Slides · Sheets · Text files'
+      dropHint: 'PDF · Word · Images · Slides · Sheets · Text files',
+      generateDefaults: STANDARD_STUDY_GENERATE
     },
     files: {
       uploadKind: 'files',
@@ -2071,14 +2717,16 @@ document.addEventListener('DOMContentLoaded', () => {
       desc: 'Add PDFs, Word docs, images, slides, and sheets',
       icon: '📚',
       dropTitle: 'Drop files or click to upload',
-      dropHint: 'PDF · Word · Images · Slides · Sheets · Text files'
+      dropHint: 'PDF · Word · Images · Slides · Sheets · Text files',
+      generateDefaults: STANDARD_STUDY_GENERATE
     },
     text: {
       uploadKind: 'text',
       panel: 'text',
       title: 'Paste text',
       desc: 'Paste notes, a lecture transcript, or chapter text',
-      icon: '📝'
+      icon: '📝',
+      generateDefaults: STANDARD_STUDY_GENERATE
     },
     audio: {
       uploadKind: 'files',
@@ -2086,7 +2734,8 @@ document.addEventListener('DOMContentLoaded', () => {
       inputView: 'audioUpload',
       title: 'Upload audio',
       desc: 'Add an MP3, M4A, WAV, or other lecture recording',
-      icon: '🎧'
+      icon: '🎧',
+      generateDefaults: STANDARD_STUDY_GENERATE
     },
     record: {
       uploadKind: 'files',
@@ -2094,7 +2743,8 @@ document.addEventListener('DOMContentLoaded', () => {
       inputView: 'record',
       title: 'Record lecture',
       desc: 'Record live audio with your microphone',
-      icon: '🎙️'
+      icon: '🎙️',
+      generateDefaults: STANDARD_STUDY_GENERATE
     },
     youtube: {
       uploadKind: 'url',
@@ -2102,7 +2752,8 @@ document.addEventListener('DOMContentLoaded', () => {
       urlType: 'youtube',
       title: 'YouTube video link',
       desc: 'Paste a lecture or tutorial link to build a study session',
-      icon: '▶️'
+      icon: '▶️',
+      generateDefaults: STANDARD_STUDY_GENERATE
     },
     website: {
       uploadKind: 'url',
@@ -2110,9 +2761,50 @@ document.addEventListener('DOMContentLoaded', () => {
       urlType: 'website',
       title: 'Website link',
       desc: 'Paste an article or web page to turn into study materials',
-      icon: '🌐'
+      icon: '🌐',
+      generateDefaults: STANDARD_STUDY_GENERATE
+    },
+    podcast: {
+      uploadKind: 'text',
+      panel: 'podcast',
+      title: 'Generate podcast',
+      desc: 'Paste text or upload a document to create a voiced study podcast.',
+      icon: '🎧',
+      preferredTab: 'podcast',
+      podcastOnly: true,
+      generateDefaults: { notes: false, flashcards: false, quiz: false, podcast: true }
+    },
+    interview: {
+      uploadKind: 'text',
+      panel: 'interview',
+      title: 'Mock interview',
+      desc: 'Enter your job title and experience level to start a mock interview.',
+      icon: '💼',
+      preferredTab: 'interview',
+      interviewOnly: true
+    },
+    practice: {
+      uploadKind: 'text',
+      panel: 'practice',
+      title: 'Practice session',
+      desc: 'Paste material to build flashcards and a practice quiz',
+      icon: '🎯',
+      preferredTab: 'quiz',
+      generateDefaults: STANDARD_STUDY_GENERATE
     }
   };
+
+  function applyGenerateDefaults(defaults) {
+    if (!defaults) return;
+    const map = {
+      notes: document.getElementById('dash-gen-notes'),
+      flashcards: document.getElementById('dash-gen-flashcards'),
+      quiz: document.getElementById('dash-gen-quiz')
+    };
+    Object.entries(defaults).forEach(([key, value]) => {
+      if (map[key]) map[key].checked = Boolean(value);
+    });
+  }
 
   function esc(text) {
     return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -2148,6 +2840,50 @@ document.addEventListener('DOMContentLoaded', () => {
     if (modalIcon) modalIcon.textContent = config.icon;
     syncInputTabs(variant);
 
+    applyGenerateDefaults(
+      config.interviewOnly || config.podcastOnly
+        ? config.generateDefaults
+        : STANDARD_STUDY_GENERATE
+    );
+
+    if (generateOptionsEl) generateOptionsEl.hidden = Boolean(config.interviewOnly || config.podcastOnly);
+    if (generateBtn) {
+      generateBtn.textContent = config.interviewOnly
+        ? 'Start interview'
+        : config.podcastOnly
+          ? 'Generate podcast'
+          : 'Generate session';
+    }
+
+    modal.classList.remove('is-interview-only', 'is-podcast-only');
+    if (config.interviewOnly) {
+      modal.classList.add('is-interview-only');
+      if (inputTabs) inputTabs.hidden = true;
+      if (sessionNameWrap) sessionNameWrap.hidden = true;
+      modePanels.forEach((panel) => {
+        panel.hidden = panel !== interviewPanel;
+      });
+      if (interviewPanel) interviewPanel.hidden = false;
+    } else if (config.podcastOnly) {
+      modal.classList.add('is-podcast-only');
+      if (inputTabs) inputTabs.hidden = true;
+      if (sessionNameWrap) sessionNameWrap.hidden = true;
+      modePanels.forEach((panel) => {
+        panel.hidden = panel !== podcastPanel;
+      });
+      if (podcastPanel) podcastPanel.hidden = false;
+      if (podcastFileInput) podcastFileInput.accept = SMART_UPLOAD_ACCEPT;
+      setPodcastSource(podcastSource || 'files');
+    } else {
+      if (inputTabs) inputTabs.hidden = false;
+      if (sessionNameWrap) {
+        sessionNameWrap.hidden = false;
+        if (inputTabs && modalBody) {
+          modalBody.insertBefore(sessionNameWrap, inputTabs);
+        }
+      }
+    }
+
     if (config.panel === 'files' && fileInput) {
       fileInput.accept = SMART_UPLOAD_ACCEPT;
       if (dropTitleEl) dropTitleEl.textContent = config.dropTitle || MODE_CONFIG.materials.dropTitle;
@@ -2179,6 +2915,47 @@ document.addEventListener('DOMContentLoaded', () => {
       if (materialsSection) materialsSection.hidden = true;
       if (audioStack) audioStack.hidden = true;
     }
+
+    if (!modal.hidden) setSidebarUploadSelection(variant);
+  }
+
+  function setPodcastSource(source) {
+    podcastSource = source;
+    podcastSourceTabs?.querySelectorAll('[data-podcast-source]').forEach((tab) => {
+      const active = tab.dataset.podcastSource === source;
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    podcastPanel?.querySelectorAll('[data-podcast-source-panel]').forEach((panel) => {
+      const active = panel.dataset.podcastSourcePanel === source;
+      panel.classList.toggle('is-active', active);
+      panel.hidden = !active;
+    });
+    if (source === 'text') {
+      podcastTextInput?.focus();
+    } else if (source === 'files') {
+      podcastFileTrigger?.focus();
+    }
+  }
+
+  function renderPodcastFileList() {
+    if (!podcastFileListEl) return;
+    if (!podcastSelectedFiles.length) {
+      podcastFileListEl.hidden = true;
+      podcastFileListEl.innerHTML = '';
+      return;
+    }
+    podcastFileListEl.hidden = false;
+    podcastFileListEl.innerHTML = podcastSelectedFiles.map((file, index) => (
+      `<li class="study-file-chip">${esc(file.name)}<button type="button" data-podcast-remove-index="${index}" aria-label="Remove ${esc(file.name)}">×</button></li>`
+    )).join('');
+  }
+
+  function addPodcastFiles(fileList) {
+    const incoming = Array.from(fileList || []).filter(Boolean);
+    if (!incoming.length) return;
+    podcastSelectedFiles = podcastSelectedFiles.concat(incoming);
+    renderPodcastFileList();
   }
 
   function resetModalState() {
@@ -2191,16 +2968,34 @@ document.addEventListener('DOMContentLoaded', () => {
     if (youtubeUrlInput) youtubeUrlInput.value = '';
     if (websiteUrlInput) websiteUrlInput.value = '';
     if (pasteTextInput) pasteTextInput.value = '';
+    if (interviewRoleInput) interviewRoleInput.value = '';
+    if (interviewLevelInput) interviewLevelInput.value = 'mid';
+    if (interviewTypeInput) interviewTypeInput.value = 'mixed';
+    if (podcastTextInput) podcastTextInput.value = '';
+    podcastSelectedFiles = [];
+    renderPodcastFileList();
+    if (podcastFileInput) podcastFileInput.value = '';
+    setPodcastSource('files');
+    if (practiceTextInput) practiceTextInput.value = '';
     setStatus('');
   }
 
   function openModal(variant) {
     resetModalState();
     setMode(variant);
+    setSidebarUploadSelection(variant);
     modal.hidden = false;
     modal.setAttribute('aria-hidden', 'false');
     document.body.classList.add('modal-open');
-    window.setTimeout(() => sessionNameInput?.focus(), 50);
+    window.setTimeout(() => {
+      if (activeVariant === 'interview') {
+        interviewRoleInput?.focus();
+      } else if (activeVariant === 'podcast') {
+        podcastTextInput?.focus();
+      } else {
+        sessionNameInput?.focus();
+      }
+    }, 50);
   }
 
   function closeModal() {
@@ -2209,6 +3004,7 @@ document.addEventListener('DOMContentLoaded', () => {
     modal.hidden = true;
     modal.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('modal-open');
+    restoreSidebarDashboardSection();
     setStatus('');
   }
 
@@ -2319,6 +3115,40 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  podcastSourceTabs?.querySelectorAll('[data-podcast-source]').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      setPodcastSource(tab.dataset.podcastSource || 'files');
+      setStatus('');
+    });
+  });
+
+  podcastFileTrigger?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    podcastFileInput?.click();
+  });
+  podcastDropZone?.addEventListener('click', (event) => {
+    if (event.target.closest('[data-podcast-remove-index]')) return;
+    if (event.target.closest('#dash-podcast-file-trigger')) return;
+    podcastFileInput?.click();
+  });
+  podcastFileInput?.addEventListener('change', () => {
+    addPodcastFiles(Array.from(podcastFileInput.files || []));
+    podcastFileInput.value = '';
+  });
+  podcastDropZone?.addEventListener('dragover', (e) => { e.preventDefault(); podcastDropZone.classList.add('is-dragover'); });
+  podcastDropZone?.addEventListener('dragleave', () => podcastDropZone.classList.remove('is-dragover'));
+  podcastDropZone?.addEventListener('drop', (e) => {
+    e.preventDefault();
+    podcastDropZone.classList.remove('is-dragover');
+    addPodcastFiles(Array.from(e.dataTransfer?.files || []));
+  });
+  podcastFileListEl?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-podcast-remove-index]');
+    if (!btn) return;
+    podcastSelectedFiles.splice(Number(btn.dataset.podcastRemoveIndex), 1);
+    renderPodcastFileList();
+  });
+
   modal.querySelectorAll('[data-dash-session-close]').forEach((el) => {
     el.addEventListener('click', closeModal);
   });
@@ -2398,10 +3228,53 @@ document.addEventListener('DOMContentLoaded', () => {
     let url = '';
     let urlType = '';
     const config = MODE_CONFIG[activeVariant] || MODE_CONFIG.materials;
+    let contentMode = activeMode === 'url' ? 'url' : activeMode === 'text' ? 'text' : 'files';
 
-    if (activeMode === 'text') {
-      text = pasteTextInput?.value.trim() || '';
-      if (!text) return setStatus('Paste some text first.', true);
+    if (activeVariant === 'podcast') {
+      if (podcastSource === 'files') {
+        files = podcastSelectedFiles.slice();
+        if (!files.length) return setStatus('Add at least one file.', true);
+        contentMode = 'files';
+      } else {
+        text = podcastTextInput?.value.trim() || '';
+        if (!text) return setStatus('Paste text for your podcast first.', true);
+        contentMode = 'text';
+      }
+    } else if (activeMode === 'text') {
+      if (activeVariant === 'interview') {
+        const jobTitle = interviewRoleInput?.value.trim() || '';
+        if (!jobTitle) return setStatus('Enter a job title first.', true);
+        closeModal();
+        window.dispatchEvent(new CustomEvent('bipai:study-session-ready', {
+          detail: {
+            sessionTitle: jobTitle,
+            data: {
+              sessionName: jobTitle,
+              notes: {},
+              quiz: {},
+              flashcards: [],
+              podcast: {},
+              sourceText: '',
+              source: jobTitle,
+              inputType: 'interview',
+              interviewType: interviewTypeInput?.value || 'mixed',
+              interviewRole: jobTitle,
+              interviewLevel: interviewLevelInput?.value || 'mid',
+              _preferredTab: 'interview',
+              _interviewOnly: true
+            },
+            activeMode: 'text',
+            partial: false
+          }
+        }));
+        return;
+      } else if (activeVariant === 'practice') {
+        text = practiceTextInput?.value.trim() || '';
+        if (!text) return setStatus('Paste what you want to practice first.', true);
+      } else {
+        text = pasteTextInput?.value.trim() || '';
+        if (!text) return setStatus('Paste some text first.', true);
+      }
     } else if (activeMode === 'files') {
       if (activeVariant === 'materials' || activeVariant === 'files') {
         files = selectedFiles.slice();
@@ -2432,13 +3305,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let generate;
     try {
-      generate = validateGenerateOptions(readGenerateOptions('dash-'));
+      if (activeVariant === 'podcast') {
+        generate = { notes: false, flashcards: false, quiz: false, podcast: true };
+      } else if (activeVariant !== 'interview') {
+        generate = validateGenerateOptions(readGenerateOptions('dash-'));
+      }
     } catch (err) {
       return setStatus(err.message, true);
     }
 
     const hasAudioOnly = activeVariant === 'audio' || activeVariant === 'record';
-    const contentMode = activeMode === 'url' ? 'url' : activeMode === 'text' ? 'text' : hasAudioOnly ? 'audio' : 'files';
+    if (activeVariant !== 'podcast') {
+      contentMode = activeMode === 'url' ? 'url' : activeMode === 'text' ? 'text' : hasAudioOnly ? 'audio' : 'files';
+    }
     const loadMsgs = loadingMessagesForGenerate(generate, contentMode);
     showLoading(loadMsgs);
     setStatus('');
@@ -2447,13 +3326,30 @@ document.addEventListener('DOMContentLoaded', () => {
       let opened = false;
       const sessionTitleBase = sessionNameInput?.value.trim() || '';
       const mode = contentMode;
+      const clientSourceMeta = activeVariant !== 'podcast' && activeVariant !== 'interview'
+        ? buildClientSourceMeta(mode, { files, text, url })
+        : {};
+      const sessionMeta = { ...clientSourceMeta };
+      if (activeVariant === 'interview') {
+        sessionMeta.interviewType = interviewTypeInput?.value || 'mixed';
+        sessionMeta.interviewRole = interviewRoleInput?.value.trim() || '';
+        sessionMeta.interviewLevel = interviewLevelInput?.value || 'mid';
+        sessionMeta._preferredTab = 'interview';
+      } else if (activeVariant === 'practice') {
+        sessionMeta._preferredTab = 'quiz';
+      } else if (activeVariant === 'podcast') {
+        sessionMeta._preferredTab = 'podcast';
+        sessionMeta._podcastOnly = true;
+      }
+      const mergeSessionMeta = (payload) => mergeStudySessionPayload(payload, sessionMeta);
       const data = await createStudySessionStaged({
         files,
         text,
         url,
         urlType,
         sessionName: sessionTitleBase,
-        generate
+        generate,
+        podcastStyle: readPodcastStyle('dash-')
       }, {
         onProgress: (msg, percent) => {
           if (loadingText) loadingText.textContent = msg;
@@ -2471,8 +3367,8 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           window.dispatchEvent(new CustomEvent('bipai:study-session-ready', {
             detail: {
-              sessionTitle: resolveSessionTitle(sessionTitleBase, partial, mode, files),
-              data: partial,
+              sessionTitle: resolveSessionTitle(sessionTitleBase, mergeSessionMeta(partial), mode, files),
+              data: mergeSessionMeta(partial),
               activeMode: mode,
               partial: Boolean(partial._pendingFlashcards || partial._pendingQuiz || partial._pendingPodcast)
             }
@@ -2485,8 +3381,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       window.dispatchEvent(new CustomEvent('bipai:study-session-ready', {
         detail: {
-          sessionTitle: resolveSessionTitle(sessionTitleBase, data, mode, files),
-          data,
+          sessionTitle: resolveSessionTitle(sessionTitleBase, mergeSessionMeta(data), mode, files),
+          data: mergeSessionMeta(data),
           activeMode: mode,
           partial: false
         }
@@ -2766,23 +3662,25 @@ document.addEventListener('DOMContentLoaded', () => {
       : '';
     container.innerHTML = `
       ${previewGrid}
-      <h4>${notes.title || 'Smart notes'}</h4>
+      <h4 class="study-rich-text">${formatStudyInline(notes.title || 'Smart notes')}</h4>
       ${typeSummary}
       ${pageInfo}
-      <ul>${(notes.bullets || []).map((item) => `<li>${item}</li>`).join('')}</ul>
-      ${notes.source ? `<p class="study-result-meta">Source: ${notes.source}</p>` : ''}`;
+      <ul class="study-notes-list">${splitNoteBullets(notes.bullets).map((item) => `<li class="study-rich-text">${formatStudyInline(item)}</li>`).join('')}</ul>
+      ${notes.source ? `<p class="study-result-meta">Source: ${escHtml(notes.source)}</p>` : ''}`;
+    typesetRichContent(container);
   }
 
   function renderQuizResult(container, data) {
     const quiz = data.quiz || data;
     window.__bipai_quiz = quiz;
     container.innerHTML = `
-      <h4>${quiz.title || 'Generated quiz'}</h4>
+      <h4 class="study-rich-text">${formatStudyInline(quiz.title || 'Generated quiz')}</h4>
       ${(quiz.questions || []).map((q, i) => `
-        <div class="study-quiz-item">
-          <strong>Q${i + 1}. ${q.q}</strong>
-          <ul>${(q.options || []).map((opt, idx) => `<li>${idx === q.answer ? `<em>${opt}</em>` : opt}</li>`).join('')}</ul>
+        <div class="study-quiz-item study-rich-text">
+          <strong>Q${i + 1}. ${formatStudyInline(q.q)}</strong>
+          <ul>${(q.options || []).map((opt, idx) => `<li>${idx === q.answer ? `<em>${formatStudyInline(opt)}</em>` : formatStudyInline(opt)}</li>`).join('')}</ul>
         </div>`).join('')}`;
+    typesetRichContent(container);
   }
 
   function showWorkspaceResult(tool, html) {
@@ -3216,6 +4114,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <option value="conversational">Conversational</option>
           <option value="lecture">Lecture style</option>
           <option value="interview">Interview</option>
+          <option value="practice">Practice</option>
         </select>
       </label>
       <div class="study-modal-panel" data-panel="upload">
@@ -3789,11 +4688,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusEl = document.getElementById('study-generate-status');
   const resultsTitle = document.getElementById('study-results-title');
   const resultsMeta = document.getElementById('study-results-meta');
+  const sessionSourceEl = document.getElementById('study-session-source');
   const tabButtons = document.querySelectorAll('#study-results .study-tab');
   const panels = {
+    original: document.getElementById('study-tab-original'),
     notes: document.getElementById('study-tab-notes'),
     flashcards: document.getElementById('study-tab-flashcards'),
     quiz: document.getElementById('study-tab-quiz'),
+    interview: document.getElementById('study-tab-interview'),
     podcast: document.getElementById('study-tab-podcast'),
     tutor: document.getElementById('study-tab-tutor')
   };
@@ -3851,6 +4753,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function showResultsOnly() {
+    setSidebarUploadSelection(null);
     document.body.classList.add('study-has-session');
     if (workspaceEl) workspaceEl.hidden = false;
     resultsEl.hidden = false;
@@ -3881,9 +4784,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function syncReadingTabs(flags) {
     const {
+      hasOriginal = false,
       hasNotes,
       hasFlashcards,
       hasQuiz,
+      hasInterview = false,
       hasPodcast,
       hasTutor = false,
       pendingNotes = false,
@@ -3891,37 +4796,47 @@ document.addEventListener('DOMContentLoaded', () => {
       pendingQuiz = false,
       pendingPodcast = false,
       tutorActive = false,
+      interviewActive = false,
       quizFailed = false
     } = flags;
     const visible = {
+      original: hasOriginal,
       notes: hasNotes || pendingNotes,
       flashcards: hasFlashcards || pendingFlashcards,
       quiz: hasQuiz || pendingQuiz || quizFailed,
+      interview: hasInterview,
       podcast: hasPodcast || pendingPodcast,
       tutor: hasTutor
     };
     const ready = {
+      original: hasOriginal,
       notes: hasNotes && !pendingNotes,
       flashcards: hasFlashcards && !pendingFlashcards,
       quiz: hasQuiz && !pendingQuiz,
+      interview: interviewActive,
       podcast: hasPodcast && !pendingPodcast,
       tutor: tutorActive
     };
     tabButtons.forEach((btn) => {
-      btn.hidden = !visible[btn.dataset.tab];
+      const tab = btn.dataset.tab;
+      btn.hidden = !visible[tab];
       btn.classList.remove('is-active');
+      if (!btn.hidden) {
+        btn.textContent = studyTabLabel(tab, { pendingFlashcards, pendingQuiz });
+      }
     });
     progressItems.forEach((item) => {
       const tab = item.dataset.goto;
       const show = visible[tab];
       item.hidden = !show;
-      item.classList.remove('is-done', 'is-pending');
+      item.classList.remove('is-done', 'is-pending', 'is-active');
       if (show) {
         if (ready[tab]) item.classList.add('is-done');
         else item.classList.add('is-pending');
       }
-      const icon = item.querySelector('.check-icon');
-      if (icon) icon.textContent = ready[tab] ? '✓' : show ? '…' : '○';
+      const icon = ready[tab] ? '✓' : show ? '…' : '○';
+      const label = studyTabLabel(tab, { pendingFlashcards, pendingQuiz });
+      item.innerHTML = `<span class="check-icon">${icon}</span> ${label}`;
     });
     if (sessionProgressCard) {
       sessionProgressCard.hidden = !Object.values(visible).some(Boolean);
@@ -3930,7 +4845,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function firstReadingTab(map) {
-    return ['notes', 'flashcards', 'quiz', 'podcast', 'tutor'].find((tab) => map[tab]) || null;
+    return ['original', 'notes', 'flashcards', 'quiz', 'interview', 'podcast', 'tutor'].find((tab) => map[tab]) || null;
   }
 
   function buildTutorContext(data = {}) {
@@ -3971,7 +4886,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function formatTutorHtml(text) {
-    return esc(text).replace(/\n/g, '<br>');
+    return formatStudyInline(text).replace(/\n/g, '<br>');
   }
 
   function tutorWelcomeMessage(context) {
@@ -3985,39 +4900,405 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!container) return;
     container.innerHTML = messages.map((msg) => `
       <div class="tutor-message tutor-message-${msg.role === 'user' ? 'user' : 'bot'}">
-        <p>${formatTutorHtml(msg.text)}</p>
+        <p class="study-rich-text">${formatTutorHtml(msg.text)}</p>
       </div>`).join('');
+    typesetRichContent(container);
     container.scrollTop = container.scrollHeight;
   }
 
   async function persistTutorState() {
-    if (!sessionData || !currentSessionId) return;
+    if (!sessionData || !currentSessionId || isInterviewSession(sessionData)) return;
     const displayTitle = sessionData.sessionName || resultsTitle?.textContent || 'Study session';
-    const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = sessionData;
-    const payload = {
+    const { notes = {}, flashcards = [], quiz = {} } = sessionData;
+    const payload = slimSessionForDb({
       id: currentSessionId,
       name: displayTitle,
       createdAt: sessionData.createdAt || Date.now(),
-      source: notes.source || '',
+      source: sessionData.source || notes.source || '',
       inputType: sessionData.inputType || 'files',
       inputText: sessionData.inputText || sessionData.sourceText || '',
       audioUrl: sessionData.audioUrl || null,
-      cardCount: flashcards.length,
-      quizCount: quiz.questions?.length || 0,
       notes,
-      quiz,
       flashcards,
-      podcast,
-      sourceText: sessionData.sourceText || sessionData.inputText || '',
-      tutorChat: sessionData.tutorChat || [],
-      tutorDone: Boolean(sessionData.tutorDone)
-    };
+      quiz,
+      originalText: sessionData.originalText || sessionData.inputText || sessionData.sourceText || '',
+      sourceText: sessionData.originalText || sessionData.inputText || sessionData.sourceText || ''
+    });
+    if (!payload) return;
     upsertSessionCache(payload);
     try {
       await saveStudySessionToDb(payload);
     } catch (err) {
-      console.warn('Tutor chat save failed:', err.message);
+      console.warn('Session save failed:', err.message);
     }
+  }
+
+  function renderInterviewMessages(container, messages) {
+    if (!container) return;
+    container.innerHTML = messages.map((msg) => {
+      const isCandidate = msg.role === 'candidate';
+      const label = isCandidate ? 'Your answer' : (msg.kind === 'feedback' ? 'Interviewer feedback' : 'Interviewer question');
+      return `
+      <div class="tutor-message tutor-message-${isCandidate ? 'user' : 'bot'}${msg.kind === 'feedback' ? ' tutor-message-feedback' : ''}">
+        <span class="interview-message-label">${label}</span>
+        <p class="study-rich-text">${formatTutorHtml(msg.text)}</p>
+      </div>`;
+    }).join('');
+    typesetRichContent(container);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function renderInterviewReviewSection(items = []) {
+    if (!items.length) {
+      return `
+        <div class="interview-review interview-review-empty">
+          <h3 class="interview-review-title">Interview review</h3>
+          <p class="study-result-meta">Nice work — no weak answers to review. Your responses met the bar for this level.</p>
+        </div>`;
+    }
+    return `
+      <div class="interview-review">
+        <h3 class="interview-review-title">Questions to practice</h3>
+        <p class="study-result-meta">These questions were not answered well enough. Review the suggested answers below.</p>
+        <div class="interview-review-list">
+          ${items.map((item) => `
+            <article class="interview-review-card">
+              <p class="interview-review-q"><span class="interview-review-label">Question ${esc(String(item.questionNumber || ''))}</span> ${formatStudyInline(item.question || '')}</p>
+              ${item.userAnswer ? `<p class="interview-review-your"><span class="interview-review-label">Your answer</span> ${formatStudyInline(item.userAnswer)}</p>` : ''}
+              <p class="interview-review-suggested"><span class="interview-review-label">Suggested answer</span> ${formatStudyInline(item.suggestedAnswer || '')}</p>
+            </article>
+          `).join('')}
+        </div>
+      </div>`;
+  }
+
+  async function requestInterviewReview() {
+    const context = buildTutorContext(sessionData || {});
+    const history = (sessionData?.interviewChat || []).map((msg) => ({
+      role: msg.role === 'candidate' ? 'candidate' : 'interviewer',
+      text: msg.text,
+      kind: msg.kind || (msg.role === 'candidate' ? 'answer' : 'question'),
+      questionNumber: msg.questionNumber
+    }));
+    return sendInterviewTurn({
+      context,
+      interviewType: sessionData?.interviewType || 'mixed',
+      roleTitle: sessionData?.interviewRole || '',
+      experienceLevel: sessionData?.interviewLevel || 'mid',
+      history,
+      action: 'review'
+    });
+  }
+
+  function mountInterviewReview(container, items = []) {
+    if (!container) return;
+    container.innerHTML = renderInterviewReviewSection(items);
+    typesetRichContent(container);
+  }
+
+  function updateInterviewStepLabel(label) {
+    const el = panels.interview?.querySelector('#interview-step-label');
+    if (el) el.textContent = label;
+  }
+
+  async function requestInterviewTurn(action, userAnswer = '') {
+    const context = buildTutorContext(sessionData || {});
+    const history = (sessionData?.interviewChat || []).map((msg) => ({
+      role: msg.role === 'candidate' ? 'candidate' : 'interviewer',
+      text: msg.text,
+      kind: msg.kind || (msg.role === 'candidate' ? 'answer' : 'question')
+    }));
+    return sendInterviewTurn({
+      context,
+      interviewType: sessionData?.interviewType || 'mixed',
+      roleTitle: sessionData?.interviewRole || '',
+      experienceLevel: sessionData?.interviewLevel || 'mid',
+      history,
+      userAnswer,
+      action
+    });
+  }
+
+  function renderJobInterviewPanel() {
+    if (!panels.interview) return;
+    const messages = sessionData?.interviewChat || [];
+    const interviewType = sessionData?.interviewType || 'mixed';
+    const interviewRole = sessionData?.interviewRole || '';
+    const interviewLevel = sessionData?.interviewLevel || 'mid';
+    const awaitingAnswer = Boolean(sessionData?.interviewAwaitingAnswer);
+    const started = messages.length > 0;
+    const questionCount = countInterviewQuestions(messages);
+    const hasFeedback = countInterviewFeedback(messages) > 0;
+    const reviewItems = sessionData?.interviewReview;
+    const reviewReady = Array.isArray(reviewItems);
+    const showContinue = started && !awaitingAnswer && !reviewReady && hasFeedback;
+
+    panels.interview.innerHTML = `
+      <div class="study-interview-panel">
+        <div class="study-interview-setup-card"${started ? ' hidden' : ''} id="interview-setup-card">
+          <div class="study-interview-options">
+            <label class="study-interview-option">
+              <span class="study-field-label">Job title</span>
+              <input type="text" id="interview-role" class="study-session-name" placeholder="e.g. Software Engineer, Data Analyst" value="${esc(interviewRole)}" maxlength="80" required />
+            </label>
+            <label class="study-interview-option">
+              <span class="study-field-label">Experience level</span>
+              <select id="interview-level" class="study-select">
+                <option value="junior"${interviewLevel === 'junior' ? ' selected' : ''}>Junior</option>
+                <option value="mid"${interviewLevel === 'mid' ? ' selected' : ''}>Mid-level</option>
+                <option value="senior"${interviewLevel === 'senior' ? ' selected' : ''}>Senior</option>
+              </select>
+            </label>
+            <label class="study-interview-option">
+              <span class="study-field-label">Interview type</span>
+              <select id="interview-type" class="study-select">
+                <option value="behavioral"${interviewType === 'behavioral' ? ' selected' : ''}>Behavioral</option>
+                <option value="technical"${interviewType === 'technical' ? ' selected' : ''}>Technical</option>
+                <option value="situational"${interviewType === 'situational' ? ' selected' : ''}>Situational</option>
+                <option value="mixed"${interviewType === 'mixed' ? ' selected' : ''}>Mixed</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <p class="interview-step-label" id="interview-step-label"${started ? '' : ' hidden'}>${started && awaitingAnswer
+          ? `Question ${Math.max(1, questionCount)} · Type your answer`
+          : started ? 'Review feedback, then continue' : ''}</p>
+        <div class="interview-messages tutor-messages" id="interview-messages" role="log" aria-live="polite"${started ? '' : ' hidden'}></div>
+        <div id="interview-review-wrap"${reviewReady ? '' : ' hidden'}></div>
+        <p id="interview-error" class="study-status-msg is-error" hidden></p>
+        <div class="study-interview-actions">
+          <form class="tutor-form study-interview-form" id="interview-form"${started && awaitingAnswer ? '' : ' hidden'}>
+            <input type="text" id="interview-input" placeholder="Type your answer to this question…" autocomplete="off" />
+            <button type="submit" class="button button-primary" id="interview-submit">Submit answer</button>
+          </form>
+          <div class="interview-action-bar">
+            <button type="button" class="button button-soft interview-action-btn" id="interview-start"${started ? ' hidden' : ''}>Start interview</button>
+            <button type="button" class="button button-soft interview-action-btn" id="interview-next"${showContinue ? '' : ' hidden'}>Next question</button>
+            <button type="button" class="button button-soft interview-action-btn" id="interview-end"${showContinue ? '' : ' hidden'}>End interview & review</button>
+            <button type="button" class="button button-soft button-sm interview-action-reset" id="interview-reset"${started ? '' : ' hidden'}>Start over</button>
+          </div>
+        </div>
+      </div>`;
+
+    const listEl = panels.interview.querySelector('#interview-messages');
+    const reviewWrap = panels.interview.querySelector('#interview-review-wrap');
+    const errorEl = panels.interview.querySelector('#interview-error');
+    if (messages.length) {
+      listEl?.removeAttribute('hidden');
+      renderInterviewMessages(listEl, messages);
+    }
+    if (reviewReady) {
+      reviewWrap?.removeAttribute('hidden');
+      mountInterviewReview(reviewWrap, reviewItems);
+      updateInterviewStepLabel('Interview complete · Review questions below');
+    }
+
+    const typeEl = panels.interview.querySelector('#interview-type');
+    const roleEl = panels.interview.querySelector('#interview-role');
+    const levelEl = panels.interview.querySelector('#interview-level');
+
+    function showInterviewError(msg) {
+      if (!errorEl) return;
+      errorEl.hidden = !msg;
+      errorEl.textContent = msg || '';
+    }
+
+    typeEl?.addEventListener('change', () => {
+      sessionData.interviewType = typeEl.value;
+    });
+    levelEl?.addEventListener('change', () => {
+      sessionData.interviewLevel = levelEl.value;
+    });
+    roleEl?.addEventListener('input', () => {
+      sessionData.interviewRole = roleEl.value.trim();
+    });
+
+    async function setInterviewBusy(busy) {
+      panels.interview.querySelectorAll('#interview-start, #interview-submit, #interview-next, #interview-end, #interview-reset, #interview-input')
+        .forEach((el) => { if (el) el.disabled = busy; });
+    }
+
+    function showInterviewContinueActions() {
+      if (sessionData.interviewReview) return;
+      panels.interview.querySelector('#interview-next')?.removeAttribute('hidden');
+      panels.interview.querySelector('#interview-end')?.removeAttribute('hidden');
+    }
+
+    function hideInterviewContinueActions() {
+      panels.interview.querySelector('#interview-next')?.setAttribute('hidden', '');
+      panels.interview.querySelector('#interview-end')?.setAttribute('hidden', '');
+    }
+
+    async function appendInterviewerQuestion(text) {
+      const questionNumber = countInterviewQuestions(sessionData.interviewChat) + 1;
+      sessionData.interviewChat.push({
+        role: 'interviewer',
+        kind: 'question',
+        questionNumber,
+        text,
+        at: Date.now()
+      });
+      sessionData.interviewAwaitingAnswer = true;
+      renderInterviewMessages(listEl, sessionData.interviewChat);
+      panels.interview.querySelector('#interview-setup-card')?.setAttribute('hidden', '');
+      panels.interview.querySelector('#interview-messages')?.removeAttribute('hidden');
+      panels.interview.querySelector('#interview-step-label')?.removeAttribute('hidden');
+      panels.interview.querySelector('#interview-form')?.removeAttribute('hidden');
+      panels.interview.querySelector('#interview-start')?.setAttribute('hidden', '');
+      hideInterviewContinueActions();
+      panels.interview.querySelector('#interview-reset')?.removeAttribute('hidden');
+      updateInterviewStepLabel(`Question ${questionNumber} · Type your answer`);
+      panels.interview.querySelector('#interview-input')?.focus();
+    }
+
+    async function runInterviewStart() {
+      sessionData.interviewType = typeEl?.value || 'mixed';
+      sessionData.interviewLevel = levelEl?.value || 'mid';
+      sessionData.interviewRole = roleEl?.value.trim() || '';
+      if (!sessionData.interviewRole) {
+        showInterviewError('Enter a job title to start.');
+        roleEl?.focus();
+        return;
+      }
+      showInterviewError('');
+      if (!sessionData.interviewChat) sessionData.interviewChat = [];
+      sessionData.interviewDone = true;
+      await setInterviewBusy(true);
+      listEl.innerHTML = '';
+      const typing = document.createElement('div');
+      typing.className = 'tutor-message tutor-message-bot tutor-message-typing';
+      typing.innerHTML = '<p>Preparing question 1…</p>';
+      listEl.appendChild(typing);
+      try {
+        const { reply } = await requestInterviewTurn('start');
+        typing.remove();
+        await appendInterviewerQuestion(reply || 'Question 1: Tell me about yourself and why you are a fit for this role.');
+        markProgress('interview');
+        syncReadingTabs({
+          hasNotes: (sessionData.notes?.bullets || []).length > 0,
+          hasFlashcards: (sessionData.flashcards || []).length > 0,
+          hasQuiz: (sessionData.quiz?.questions || []).length > 0,
+          hasInterview: true,
+          hasPodcast: Boolean(sessionData.podcast?.title || sessionData.podcast?.script?.length),
+          hasTutor: Boolean(buildTutorContext(sessionData).trim()),
+          interviewActive: true
+        });
+        await persistTutorState();
+      } catch (err) {
+        typing.remove();
+        showInterviewError(err.message || 'Could not start interview.');
+      } finally {
+        await setInterviewBusy(false);
+      }
+    }
+
+    panels.interview.querySelector('#interview-start')?.addEventListener('click', runInterviewStart);
+
+    panels.interview.querySelector('#interview-reset')?.addEventListener('click', () => {
+      sessionData.interviewChat = [];
+      sessionData.interviewReview = null;
+      sessionData.interviewAwaitingAnswer = false;
+      renderJobInterviewPanel();
+    });
+
+    panels.interview.querySelector('#interview-end')?.addEventListener('click', async () => {
+      await setInterviewBusy(true);
+      showInterviewError('');
+      updateInterviewStepLabel('Preparing your review…');
+      hideInterviewContinueActions();
+      const typing = document.createElement('div');
+      typing.className = 'tutor-message tutor-message-bot tutor-message-typing';
+      typing.innerHTML = '<p>Finding questions that need stronger answers…</p>';
+      reviewWrap?.removeAttribute('hidden');
+      if (reviewWrap) {
+        reviewWrap.innerHTML = '';
+        reviewWrap.appendChild(typing);
+      }
+      try {
+        const { items } = await requestInterviewReview();
+        sessionData.interviewReview = Array.isArray(items) ? items : [];
+        mountInterviewReview(reviewWrap, sessionData.interviewReview);
+        updateInterviewStepLabel('Interview complete · Review questions below');
+        await persistTutorState();
+      } catch (err) {
+        if (reviewWrap) reviewWrap.innerHTML = '';
+        reviewWrap?.setAttribute('hidden', '');
+        showInterviewContinueActions();
+        showInterviewError(err.message || 'Could not build interview review.');
+      } finally {
+        await setInterviewBusy(false);
+      }
+    });
+
+    panels.interview.querySelector('#interview-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const input = panels.interview.querySelector('#interview-input');
+      const answer = input?.value.trim();
+      if (!answer) return;
+      sessionData.interviewChat.push({ role: 'candidate', kind: 'answer', text: answer, at: Date.now() });
+      renderInterviewMessages(listEl, sessionData.interviewChat);
+      if (input) input.value = '';
+      panels.interview.querySelector('#interview-form')?.setAttribute('hidden', '');
+      updateInterviewStepLabel(`Question ${Math.max(1, questionCount)} · Reviewing your answer…`);
+      await setInterviewBusy(true);
+      const typing = document.createElement('div');
+      typing.className = 'tutor-message tutor-message-bot tutor-message-typing';
+      typing.innerHTML = '<p>Reviewing your answer…</p>';
+      listEl.appendChild(typing);
+      listEl.scrollTop = listEl.scrollHeight;
+      try {
+        const { reply } = await requestInterviewTurn('feedback', answer);
+        typing.remove();
+        sessionData.interviewChat.push({
+          role: 'interviewer',
+          kind: 'feedback',
+          text: reply || 'Good effort — add more detail from your notes and a concrete example.',
+          at: Date.now()
+        });
+        sessionData.interviewAwaitingAnswer = false;
+        renderInterviewMessages(listEl, sessionData.interviewChat);
+        panels.interview.querySelector('#interview-form')?.setAttribute('hidden', '');
+        showInterviewContinueActions();
+        updateInterviewStepLabel('Review feedback, then continue');
+        await persistTutorState();
+      } catch (err) {
+        typing.remove();
+        sessionData.interviewChat.push({
+          role: 'interviewer',
+          kind: 'feedback',
+          text: err.message || 'Could not review your answer. Try again.',
+          at: Date.now()
+        });
+        sessionData.interviewAwaitingAnswer = false;
+        renderInterviewMessages(listEl, sessionData.interviewChat);
+        panels.interview.querySelector('#interview-form')?.setAttribute('hidden', '');
+        showInterviewContinueActions();
+      } finally {
+        await setInterviewBusy(false);
+      }
+    });
+
+    panels.interview.querySelector('#interview-next')?.addEventListener('click', async () => {
+      await setInterviewBusy(true);
+      hideInterviewContinueActions();
+      const nextNum = countInterviewQuestions(sessionData.interviewChat) + 1;
+      updateInterviewStepLabel(`Question ${nextNum} · Loading…`);
+      const typing = document.createElement('div');
+      typing.className = 'tutor-message tutor-message-bot tutor-message-typing';
+      typing.innerHTML = `<p>Preparing question ${nextNum}…</p>`;
+      listEl.appendChild(typing);
+      try {
+        const { reply } = await requestInterviewTurn('question');
+        typing.remove();
+        await appendInterviewerQuestion(reply || `Question ${nextNum}: What is the most important concept from your material and why?`);
+        await persistTutorState();
+      } catch (err) {
+        typing.remove();
+        showInterviewError(err.message || 'Could not get next question.');
+      } finally {
+        await setInterviewBusy(false);
+      }
+    });
   }
 
   function renderTutorPanel() {
@@ -4107,21 +5388,67 @@ document.addEventListener('DOMContentLoaded', () => {
     await ensureDataReady();
     const session = await fetchStudySessionById(id);
     if (!session) return false;
-    applyGeneratedSession(session.name, {
+
+    await applyGeneratedSession(session.name, {
       notes: session.notes || {},
-      quiz: session.quiz || {},
+      quiz: session.quiz || { title: 'Practice quiz', questions: [] },
       flashcards: session.flashcards || [],
-      podcast: session.podcast || {},
+      podcast: {},
+      source: session.source || session.notes?.source || '',
+      originalText: session.originalText || session.sourceText || session.inputText || '',
       sourceText: session.sourceText || session.inputText || '',
       inputType: session.inputType,
       inputText: session.inputText,
       audioUrl: session.audioUrl,
       sessionId: session.id,
-      tutorChat: session.tutorChat || [],
-      tutorDone: Boolean(session.tutorDone)
+      tutorChat: [],
+      tutorDone: false,
+      _interviewOnly: session.inputType === 'interview'
     }, session.inputType || 'files', { save: false });
     return true;
   }
+
+  async function restartStudyFlashcards() {
+    if (!sessionData || isInterviewSession(sessionData)) return;
+    if (!shouldRegenerateSavedExtras(sessionData)) {
+      setStatus('No study material to build flashcards from.', true);
+      return;
+    }
+    const title = sessionData.sessionName || resultsTitle?.textContent || 'Study session';
+    const mode = sessionData.inputType || 'files';
+    if (!confirm('Create a new set of flashcards from this session?')) return;
+    try {
+      await regenerateStudyExtras(sessionData, title, mode, applyGeneratedSession, { flashcards: true });
+      await applyGeneratedSession(title, sessionData, mode, { save: true, partial: false });
+      if (sessionData.flashcards?.length) saveFlashcardsDeck(title, sessionData.flashcards);
+    } catch (err) {
+      setStatus(err.message || 'Could not create flashcards.', true);
+    }
+  }
+
+  async function restartStudyQuiz() {
+    if (!sessionData || isInterviewSession(sessionData)) return;
+    if (!shouldRegenerateSavedExtras(sessionData)) {
+      setStatus('No study material to build a quiz from.', true);
+      return;
+    }
+    const title = sessionData.sessionName || resultsTitle?.textContent || 'Study session';
+    const mode = sessionData.inputType || 'files';
+    if (!confirm('Generate a new quiz from this session?')) return;
+    try {
+      await regenerateStudyExtras(sessionData, title, mode, applyGeneratedSession, { quiz: true });
+      await applyGeneratedSession(title, sessionData, mode, { save: true, partial: false });
+    } catch (err) {
+      setStatus(err.message || 'Could not generate quiz.', true);
+    }
+  }
+
+  panels.flashcards?.addEventListener('click', (event) => {
+    if (event.target.closest('[data-restart-flashcards]')) restartStudyFlashcards();
+  });
+  panels.quiz?.addEventListener('click', (event) => {
+    if (event.target.closest('[data-restart-quiz]')) restartStudyQuiz();
+  });
 
   newSessionBtn?.addEventListener('click', showCreateForm);
 
@@ -4319,13 +5646,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderNotesPanel(notes) {
     panels.notes.innerHTML = `
-      <h3>${esc(notes.title || 'Notes')}</h3>
-      <ul>${(notes.bullets || []).map((b) => `<li>${esc(b)}</li>`).join('')}</ul>`;
+      <h3 class="study-rich-text">${formatStudyInline(notes.title || 'Notes')}</h3>
+      <ul class="study-notes-list">${splitNoteBullets(notes.bullets).map((b) => `<li class="study-rich-text">${formatStudyInline(b)}</li>`).join('')}</ul>`;
+    typesetRichContent(panels.notes);
   }
 
   function renderFlashcardsPanel(items) {
+    const canRestart = sessionData && shouldRegenerateSavedExtras(sessionData) && !isInterviewSession(sessionData);
     if (!items?.length) {
-      panels.flashcards.innerHTML = '<p class="study-result-meta">No flashcards.</p>';
+      panels.flashcards.innerHTML = `
+        <div class="study-panel-empty">
+          <p class="study-result-meta">No flashcards yet.</p>
+          ${canRestart ? '<button type="button" class="button button-soft" data-restart-flashcards>Create flashcards</button>' : ''}
+        </div>`;
       panels.flashcards._refreshDeck = null;
       return;
     }
@@ -4334,6 +5667,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="study-flashcard-deck" data-fc-deck>
         <div class="study-flashcard-deck-head">
           <p class="study-flashcard-progress">Card <strong data-fc-current>1</strong> of <strong>${items.length}</strong></p>
+          ${canRestart ? '<button type="button" class="button button-soft button-sm" data-restart-flashcards>New flashcards</button>' : ''}
         </div>
         <div class="study-flashcard-stage">
           <button type="button" class="study-flashcard-nav study-flashcard-prev" data-fc-prev aria-label="Previous card">
@@ -4389,13 +5723,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function showCard(i) {
       index = Math.max(0, Math.min(items.length - 1, i));
       const item = items[index];
-      frontEl.textContent = cardField(item, 'q');
-      backEl.textContent = cardField(item, 'a');
+      frontEl.innerHTML = formatStudyInline(cardField(item, 'q'));
+      backEl.innerHTML = formatStudyInline(cardField(item, 'a'));
       flipCard(false);
       currentEl.textContent = String(index + 1);
       dots.forEach((d, di) => d.classList.toggle('is-active', di === index));
       prevBtn.disabled = index === 0;
       nextBtn.disabled = index === items.length - 1;
+      typesetRichContent(deck);
     }
 
     prevBtn.addEventListener('click', () => showCard(index - 1));
@@ -4448,31 +5783,37 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function persistStudySession(sessionTitle, data, activeMode) {
-    const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = data;
+    if (isInterviewSession(data)) return null;
+    const { notes = {}, flashcards = [], quiz = {} } = data;
     const inputType = data.inputType || inputTypeFromMode(activeMode);
+    const sourceInfo = describeSessionSource({ ...data, notes, name: sessionTitle, inputType });
     return saveStudySessionToDb({
       id: data.sessionId || `session-${Date.now()}`,
       name: sessionTitle,
-      createdAt: Date.now(),
-      source: notes.source || (activeMode === 'audio' ? 'Audio' : activeMode === 'url' ? 'Web link' : activeMode === 'text' ? 'Text' : 'Files'),
+      createdAt: data.createdAt || Date.now(),
+      source: data.source || sourceInfo.detail || notes.source || sourceInfo.kind,
       inputType,
       inputText: data.inputText || data.sourceText || '',
       audioUrl: data.audioUrl || null,
-      cardCount: flashcards.length,
-      quizCount: quiz.questions?.length || 0,
       notes,
-      quiz,
       flashcards,
-      podcast,
-      sourceText: data.sourceText || data.inputText || '',
-      tutorChat: data.tutorChat || [],
-      tutorDone: Boolean(data.tutorDone)
+      quiz,
+      originalText: data.originalText || data.inputText || data.sourceText || '',
+      sourceText: data.originalText || data.inputText || data.sourceText || ''
     });
   }
 
   function renderQuizPanel(quiz) {
     const questions = quiz?.questions || [];
-    if (!questions.length) { panels.quiz.innerHTML = '<p class="study-result-meta">No quiz.</p>'; return; }
+    const canRestart = sessionData && shouldRegenerateSavedExtras(sessionData) && !isInterviewSession(sessionData);
+    if (!questions.length) {
+      panels.quiz.innerHTML = `
+        <div class="study-panel-empty">
+          <p class="study-result-meta">No quiz yet.</p>
+          ${canRestart ? '<button type="button" class="button button-soft" data-restart-quiz>Generate quiz</button>' : ''}
+        </div>`;
+      return;
+    }
 
     const answers = new Array(questions.length).fill(null);
     let index = 0;
@@ -4482,8 +5823,11 @@ document.addEventListener('DOMContentLoaded', () => {
     panels.quiz.innerHTML = `
       <div class="study-quiz-deck" data-quiz-deck>
         <div class="study-quiz-deck-head">
-          <p class="study-flashcard-progress">Question <strong data-quiz-current>1</strong> of <strong>${questions.length}</strong></p>
-          <p class="study-result-meta study-quiz-progress" data-quiz-answered>0 of ${questions.length} answered</p>
+          <div class="study-quiz-deck-head-copy">
+            <p class="study-flashcard-progress">Question <strong data-quiz-current>1</strong> of <strong>${questions.length}</strong></p>
+            <p class="study-result-meta study-quiz-progress" data-quiz-answered>0 of ${questions.length} answered</p>
+          </div>
+          ${canRestart ? '<button type="button" class="button button-soft button-sm" data-restart-quiz>New quiz</button>' : ''}
         </div>
         <div class="study-flashcard-stage">
           <button type="button" class="study-flashcard-nav study-quiz-prev" data-quiz-prev aria-label="Previous question">
@@ -4562,14 +5906,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const chosen = answers[index];
 
       labelEl.textContent = `Question ${index + 1}`;
-      questionEl.textContent = q.q || '';
+      questionEl.innerHTML = formatStudyInline(q.q || '');
       optionsEl.innerHTML = (q.options || []).map((opt, oi) => {
         const classes = ['study-quiz-option'];
         if (chosen !== null) {
           if (oi === q.answer) classes.push('is-correct');
           else if (oi === chosen) classes.push('is-wrong');
         }
-        return `<button type="button" class="${classes.join(' ')}" data-opt="${oi}"${chosen !== null ? ' disabled' : ''}>${esc(opt)}</button>`;
+        return `<button type="button" class="${classes.join(' ')}" data-opt="${oi}"${chosen !== null ? ' disabled' : ''}>${formatStudyInline(opt)}</button>`;
       }).join('');
 
       if (chosen !== null) {
@@ -4590,6 +5934,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       bindOptions(index);
       updateMeta();
+      typesetRichContent(deck);
     }
 
     prevBtn.addEventListener('click', () => showQuestion(index - 1));
@@ -4632,12 +5977,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function switchTab(id) {
     tabButtons.forEach((b) => b.classList.toggle('is-active', b.dataset.tab === id && !b.hidden));
+    progressItems.forEach((item) => {
+      item.classList.toggle('is-active', item.dataset.goto === id && !item.hidden);
+    });
     Object.entries(panels).forEach(([k, p]) => { if (p) p.hidden = k !== id; });
+    const pendingFlashcards = Boolean(sessionData?._pendingFlashcards);
+    const pendingQuiz = Boolean(sessionData?._pendingQuiz);
+    const loadingHtml = studyTabLoadingHtml(id, { pendingFlashcards, pendingQuiz });
+    if (loadingHtml) {
+      if (id === 'flashcards' && panels.flashcards) panels.flashcards.innerHTML = loadingHtml;
+      if (id === 'quiz' && panels.quiz) panels.quiz.innerHTML = loadingHtml;
+    }
     if (id === 'flashcards' && panels.flashcards?._refreshDeck) {
       requestAnimationFrame(() => panels.flashcards._refreshDeck());
     }
     if (id === 'tutor' && panels.tutor && !panels.tutor.querySelector('#tutor-form')) {
       renderTutorPanel();
+    }
+    if (id === 'interview' && panels.interview && !panels.interview.querySelector('.study-interview-panel')) {
+      renderJobInterviewPanel();
     }
   }
 
@@ -4690,7 +6048,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function applyGeneratedSession(sessionTitle, data, mode, { save = true, partial = false } = {}) {
-    sessionData = { ...(sessionData || {}), ...data };
+    sessionData = {
+      ...(sessionData || {}),
+      ...mergeStudySessionPayload(data, sessionData || {})
+    };
     const { notes = {}, quiz = {}, flashcards = [], podcast = {} } = sessionData;
     const pendingFlashcards = Boolean(sessionData._pendingFlashcards);
     const pendingQuiz = Boolean(sessionData._pendingQuiz);
@@ -4707,13 +6068,21 @@ document.addEventListener('DOMContentLoaded', () => {
       || pendingPodcast
     );
     const tutorActive = Boolean(sessionData.tutorDone || (sessionData.tutorChat || []).some((m) => m.role === 'user'));
+    const interviewActive = Boolean(sessionData.interviewDone || (sessionData.interviewChat || []).length);
+    const interviewOnly = isInterviewSession(sessionData);
+    const podcastOnly = Boolean(sessionData._podcastOnly);
+    const shouldPersist = save && !partial && !interviewOnly;
+    const hasOriginal = !interviewOnly && !podcastOnly && hasOriginalStudyContent(sessionData);
     const readingMap = syncReadingTabs({
-      hasNotes,
-      hasFlashcards,
-      hasQuiz,
-      hasPodcast,
-      hasTutor: hasTutorContext,
+      hasOriginal,
+      hasNotes: podcastOnly ? false : hasNotes,
+      hasFlashcards: podcastOnly ? false : hasFlashcards,
+      hasQuiz: podcastOnly ? false : hasQuiz,
+      hasInterview: interviewOnly,
+      hasPodcast: podcastOnly || hasPodcast || pendingPodcast,
+      hasTutor: !interviewOnly && !podcastOnly && hasTutorContext,
       tutorActive,
+      interviewActive,
       pendingFlashcards,
       pendingQuiz,
       pendingPodcast,
@@ -4721,19 +6090,29 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     updateAiBanner(sessionData);
 
+    if ((interviewOnly || podcastOnly) && sessionProgressCard) {
+      sessionProgressCard.hidden = true;
+    }
+
     const displayTitle = sessionData.sessionName || sessionTitle;
     resultsTitle.textContent = displayTitle;
+    if (sessionSourceEl) {
+      const sourceMarkup = renderSessionSourceMarkup(sessionData, { escape: esc });
+      sessionSourceEl.innerHTML = sourceMarkup;
+      bindYoutubeSourceTriggers(sessionSourceEl);
+      sessionSourceEl.hidden = false;
+    }
     const metaParts = [
-      mode === 'audio' ? 'From lecture audio' : mode === 'url' ? (notes.source || 'From web link') : notes.source,
-      hasFlashcards ? `${flashcards.length} flashcards` : pendingFlashcards ? 'flashcards loading…' : '',
-      hasQuiz ? `${quiz.questions.length} quiz questions` : pendingQuiz ? 'quiz loading…' : '',
+      hasFlashcards ? `${flashcards.length} flashcards` : pendingFlashcards ? 'Creating flashcards…' : '',
+      hasQuiz ? `${quiz.questions.length} quiz questions` : pendingQuiz ? 'Generating quiz…' : '',
       hasPodcast && podcast.audio?.audioUrl ? 'podcast ready' : hasPodcast ? 'podcast included' : pendingPodcast ? 'podcast loading…' : ''
     ].filter(Boolean);
     resultsMeta.textContent = metaParts.join(' · ');
 
+    if (hasOriginal) renderOriginalPanel(panels.original, sessionData, { escape: esc });
     if (hasNotes) renderNotesPanel(notes);
     if (pendingFlashcards && panels.flashcards) {
-      panels.flashcards.innerHTML = '<p class="study-loading">Building flashcards…</p>';
+      panels.flashcards.innerHTML = studyTabLoadingHtml('flashcards', { pendingFlashcards: true });
     } else if (hasFlashcards) {
       renderFlashcardsPanel(flashcards);
       if (save && !partial) saveFlashcardsDeck(displayTitle, flashcards);
@@ -4741,7 +6120,7 @@ document.addEventListener('DOMContentLoaded', () => {
       panels.flashcards.innerHTML = `<p class="study-result-meta">${esc(sessionData._flashcardsError)}</p>`;
     }
     if (pendingQuiz && panels.quiz) {
-      panels.quiz.innerHTML = '<p class="study-loading">Building quiz…</p>';
+      panels.quiz.innerHTML = studyTabLoadingHtml('quiz', { pendingQuiz: true });
     } else if (hasQuiz) {
       renderQuizPanel(quiz);
     } else if (sessionData._quizError && panels.quiz) {
@@ -4763,41 +6142,46 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    if (hasTutorContext && (!partial || !panels.tutor.querySelector('#tutor-form'))) {
+    if (hasTutorContext && !interviewOnly && !podcastOnly && (!partial || !panels.tutor.querySelector('#tutor-form'))) {
       renderTutorPanel();
     }
+    if (interviewOnly && panels.interview && !panels.interview.querySelector('.study-interview-panel')) {
+      renderJobInterviewPanel();
+    }
 
-    const firstTab = firstReadingTab(readingMap);
+    const firstTab = sessionData._preferredTab || firstReadingTab(readingMap);
     if (firstTab && !partial) switchTab(firstTab);
     else if (firstTab && partial && !document.querySelector('#study-results .study-tab.is-active:not([hidden])')) {
       switchTab(firstTab);
     }
+    delete sessionData._preferredTab;
+    delete sessionData._interviewOnly;
+    delete sessionData._podcastOnly;
 
-    if (save && !partial) {
+    if (shouldPersist) {
       if (sessionData.savedToDatabase && sessionData.sessionId) {
         currentSessionId = sessionData.sessionId;
-        upsertSessionCache({
+        const stored = slimSessionForDb({
           id: sessionData.sessionId,
           name: displayTitle,
-          createdAt: Date.now(),
-          source: notes.source || '',
+          createdAt: sessionData.createdAt || Date.now(),
+          source: sessionData.source || notes.source || '',
           inputType: sessionData.inputType || inputTypeFromMode(mode),
           inputText: sessionData.inputText || sessionData.sourceText || '',
           audioUrl: sessionData.audioUrl || null,
-          cardCount: flashcards.length,
-          quizCount: quiz.questions?.length || 0,
           notes,
-          quiz,
           flashcards,
-          podcast,
-          sourceText: sessionData.sourceText || sessionData.inputText || '',
-          tutorChat: sessionData.tutorChat || [],
-          tutorDone: Boolean(sessionData.tutorDone)
+          quiz,
+          originalText: sessionData.originalText || sessionData.inputText || sessionData.sourceText || '',
+          sourceText: sessionData.originalText || sessionData.inputText || sessionData.sourceText || ''
         });
+        if (stored) upsertSessionCache(stored);
       } else {
         const saved = await persistStudySession(displayTitle, { ...sessionData, sessionId: sessionData.sessionId }, mode);
         currentSessionId = saved?.id || sessionData.sessionId || null;
       }
+    } else if (interviewOnly) {
+      currentSessionId = null;
     } else if (!partial) {
       currentSessionId = sessionData.sessionId || null;
     }
@@ -4844,12 +6228,17 @@ document.addEventListener('DOMContentLoaded', () => {
       let firstResult = false;
       const sessionTitleBase = sessionNameInput?.value.trim() || '';
       const mode = activeMode === 'url' ? 'url' : activeMode === 'audio' ? 'audio' : activeMode === 'text' ? 'text' : 'files';
+      sessionData = {
+        ...(sessionData || {}),
+        ...buildClientSourceMeta(mode, { files, text, url })
+      };
       const data = await createStudySessionStaged({
         files,
         text,
         url,
         sessionName: sessionTitleBase,
-        generate
+        generate,
+        podcastStyle: readPodcastStyle('dash-')
       }, {
         onProgress: (msg, percent) => {
           if (loadingText) loadingText.textContent = msg;

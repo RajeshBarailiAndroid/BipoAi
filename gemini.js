@@ -215,7 +215,10 @@ function getSolveModel() {
 
 function getAIForApiKey(apiKey) {
   if (!apiKeyClients.has(apiKey)) {
-    apiKeyClients.set(apiKey, new GoogleGenAI({ apiKey }));
+    apiKeyClients.set(apiKey, new GoogleGenAI({
+      apiKey,
+      httpOptions: { timeout: 240000 }
+    }));
   }
   return apiKeyClients.get(apiKey);
 }
@@ -313,6 +316,186 @@ Question: ${trimmed}`
       }
     });
     return sanitizeTutorReply(response.text);
+  });
+}
+
+const INTERVIEW_TYPE_LABELS = {
+  behavioral: 'Behavioral',
+  technical: 'Technical',
+  situational: 'Situational',
+  mixed: 'Mixed'
+};
+
+const INTERVIEW_LEVEL_LABELS = {
+  junior: 'Junior',
+  mid: 'Mid-level',
+  senior: 'Senior'
+};
+
+function formatInterviewHistory(history = []) {
+  return history.slice(-12).map((item) => {
+    const role = item.role === 'interviewer' ? 'Interviewer' : 'Candidate';
+    return `${role}: ${item.text}`;
+  }).join('\n');
+}
+
+async function generateInterviewTurn({
+  context = '',
+  interviewType = 'mixed',
+  roleTitle = '',
+  experienceLevel = 'mid',
+  history = [],
+  userAnswer = '',
+  action = 'question'
+}) {
+  return withFailover(async () => {
+    const ctx = (context || '').trim().slice(0, 50000);
+    const typeKey = INTERVIEW_TYPE_LABELS[interviewType] ? interviewType : 'mixed';
+    const typeLabel = INTERVIEW_TYPE_LABELS[typeKey];
+    const levelKey = INTERVIEW_LEVEL_LABELS[experienceLevel] ? experienceLevel : 'mid';
+    const levelLabel = INTERVIEW_LEVEL_LABELS[levelKey];
+    const levelGuide = {
+      junior: 'Junior level — fundamentals, willingness to learn, simple scenarios, clear communication.',
+      mid: 'Mid-level — hands-on experience, ownership, trade-offs, delivering results independently.',
+      senior: 'Senior level — leadership, system thinking, mentoring, strategy, and high-impact decisions.'
+    };
+    const jobTitle = roleTitle?.trim() || 'the role';
+    const transcript = formatInterviewHistory(history);
+    const answer = (userAnswer || '').trim();
+    const questionCount = history.filter((item) => item.kind === 'question' || item.role === 'interviewer' && !String(item.text || '').toLowerCase().includes('feedback')).length;
+
+    let instruction = '';
+    if (action === 'feedback') {
+      instruction = `The candidate just answered interview question #${Math.max(1, questionCount)} for ${jobTitle} (${levelLabel}).
+Give brief constructive feedback in 2-4 sentences:
+- One strength in their answer (if any)
+- One gap or improvement tip tied to the study material and ${levelLabel} expectations
+- Do NOT ask the next question yet
+- No greetings or filler`;
+    } else if (action === 'start' || !transcript) {
+      instruction = `Start the mock job interview for ${jobTitle} (${levelLabel}). Ask ONE interview question only — this is question #1.
+- ${typeLabel} style
+- Calibrate difficulty to ${levelLabel}: ${levelGuide[levelKey]}
+- Ground the question in the study material below when possible
+- Sound like a real hiring manager
+- Start with "Question 1:" then the question (max 2 sentences for the question itself)`;
+    } else {
+      const nextNum = questionCount + 1;
+      instruction = `Ask the NEXT interview question only — question #${nextNum} for ${jobTitle} (${levelLabel}).
+- ${typeLabel} style
+- Calibrate to ${levelLabel}: ${levelGuide[levelKey]}
+- Different topic than recent questions in the transcript
+- Ground it in the study material when possible
+- Start with "Question ${nextNum}:" then the question (max 2 sentences)`;
+    }
+
+    const contents = `${instruction}
+
+Job title: ${jobTitle}
+Experience level: ${levelLabel}
+Interview type: ${typeLabel}
+
+Study material:
+${ctx || '(No material — ask a professional interview question appropriate for this job title and level.)'}
+
+${transcript ? `Interview so far:\n${transcript}\n` : ''}${answer ? `Candidate's latest answer:\n${answer}\n` : ''}`.trim();
+
+    const response = await getAI().models.generateContent({
+      model: getDefaultModel(),
+      contents,
+      config: { temperature: 0.45 }
+    });
+    return sanitizeTutorReply(response.text);
+  });
+}
+
+function extractInterviewQAPairs(history = []) {
+  const pairs = [];
+  let pendingQuestion = null;
+  for (const item of history) {
+    const kind = item.kind || (item.role === 'candidate' ? 'answer' : 'question');
+    if (kind === 'question') {
+      pendingQuestion = item;
+    } else if (kind === 'answer' && pendingQuestion) {
+      pairs.push({
+        questionNumber: pendingQuestion.questionNumber || pairs.length + 1,
+        question: String(pendingQuestion.text || '').trim(),
+        userAnswer: String(item.text || '').trim()
+      });
+      pendingQuestion = null;
+    }
+  }
+  return pairs;
+}
+
+async function generateInterviewReview({
+  context = '',
+  interviewType = 'mixed',
+  roleTitle = '',
+  experienceLevel = 'mid',
+  history = []
+}) {
+  return withFailover(async () => {
+    const ctx = (context || '').trim().slice(0, 50000);
+    const typeKey = INTERVIEW_TYPE_LABELS[interviewType] ? interviewType : 'mixed';
+    const typeLabel = INTERVIEW_TYPE_LABELS[typeKey];
+    const levelKey = INTERVIEW_LEVEL_LABELS[experienceLevel] ? experienceLevel : 'mid';
+    const levelLabel = INTERVIEW_LEVEL_LABELS[levelKey];
+    const jobTitle = roleTitle?.trim() || 'the role';
+    const pairs = extractInterviewQAPairs(history);
+    if (!pairs.length) {
+      return { items: [] };
+    }
+
+    const qaBlock = pairs.map((pair, index) => (
+      `Question ${pair.questionNumber || index + 1}: ${pair.question}\nCandidate answer: ${pair.userAnswer || '(no answer)'}`
+    )).join('\n\n');
+
+    const contents = `You are reviewing a mock job interview for ${jobTitle} (${levelLabel}, ${typeLabel}).
+
+For each question below, decide if the candidate's answer was adequate for this level.
+Mark solved=false when the answer is missing, too vague, off-topic, or lacks examples/depth expected at ${levelLabel}.
+
+Return ONLY valid JSON (no markdown fences):
+{
+  "items": [
+    {
+      "questionNumber": 1,
+      "question": "exact question text",
+      "userAnswer": "what the candidate said",
+      "solved": false,
+      "suggestedAnswer": "a strong model answer for this question at ${levelLabel}"
+    }
+  ]
+}
+
+Include ONLY questions where solved is false. If every answer was strong, return {"items":[]}.
+
+Study material (optional context):
+${ctx || '(none)'}
+
+Interview Q&A:
+${qaBlock}`;
+
+    const response = await getAI().models.generateContent({
+      model: getDefaultModel(),
+      contents,
+      config: { temperature: 0.35, responseMimeType: 'application/json' }
+    });
+
+    const parsed = parseModelJson(response.text);
+    const items = Array.isArray(parsed?.items) ? parsed.items : [];
+    return {
+      items: items
+        .filter((item) => item && item.solved === false)
+        .map((item, index) => ({
+          questionNumber: Number(item.questionNumber) || index + 1,
+          question: String(item.question || '').trim(),
+          userAnswer: String(item.userAnswer || '').trim(),
+          suggestedAnswer: String(item.suggestedAnswer || '').trim()
+        }))
+        .filter((item) => item.question && item.suggestedAnswer)
+    };
   });
 }
 
@@ -514,7 +697,8 @@ Return JSON:
   "title": "short title",
   "bullets": ["key point 1", "key point 2", "..."]
 }
-Use 6-12 bullet points covering main ideas, definitions, and review tips.`,
+Use 6-12 bullet points covering main ideas, definitions, and review tips.
+For STEM topics, put each main concept in its own bullet starting with **Topic:** and use $...$ for inline math (LaTeX).`,
       parts
     );
     return {
@@ -539,6 +723,32 @@ Return JSON:
     );
     return {
       title: data.title || 'Lecture notes',
+      bullets: Array.isArray(data.bullets) ? data.bullets : []
+    };
+  });
+}
+
+async function generateNotesFromYoutube({ url, title = '', text = '' }) {
+  return withFailover(async () => {
+    const link = String(url || '').trim();
+    if (!link) throw new Error('Missing YouTube URL');
+    const context = String(text || '').trim().slice(0, 50000);
+    const prompt = `Watch and summarize this YouTube video into study notes.
+Video title: ${title || 'YouTube video'}
+${context ? `\nAdditional context:\n${context}` : ''}
+Return JSON:
+{
+  "title": "short title",
+  "bullets": ["key point 1", "key point 2", "..."]
+}
+Use 6-12 bullet points covering the main ideas, definitions, and review tips from the video.`;
+    const data = await generateJSON(
+      getDefaultModel(),
+      prompt,
+      [{ fileData: { fileUri: link } }]
+    );
+    return {
+      title: data.title || title || 'YouTube notes',
       bullets: Array.isArray(data.bullets) ? data.bullets : []
     };
   });
@@ -591,15 +801,28 @@ ${source}`,
 async function generatePodcast({ text, title, style }) {
   return withFailover(async () => {
     const styleKey = (style || 'conversational').toLowerCase();
+    const styleGuide = {
+      conversational: 'Two friendly co-hosts (Alex and Sam) explain the material in a back-and-forth review.',
+      lecture: 'Single lecturer Dr. Lee delivers a clear, structured lecture-style review.',
+      interview: 'Host interviews a guest expert in Q&A format — questions from a student perspective, detailed expert answers.',
+      practice: 'Active-recall practice session: Alex asks quiz-style questions from the material, Sam answers, then they clarify and give tips. Encourage the listener to pause and answer before Sam.'
+    };
+    const hostGuide = {
+      conversational: 'Use exactly two hosts: Alex (male) and Sam (female). Alternate lines.',
+      lecture: 'Use one host: Dr. Lee. All lines are lecture delivery.',
+      interview: 'Use Host and Guest expert as speakers in Q&A format.',
+      practice: 'Use Alex as questioner and Sam as answerer. Alternate practice questions and answers.'
+    };
     const data = await generateJSON(
       getDefaultModel(),
       `Create a study podcast script from this material:
 ${(text || '').slice(0, 120000)}
 
 Style: ${styleKey}
+${styleGuide[styleKey] || styleGuide.conversational}
 Episode title: ${title || 'Study podcast episode'}
 
-Use exactly two hosts: Alex (male co-host) and Sam (female co-host). Alternate lines between them.
+${hostGuide[styleKey] || hostGuide.conversational}
 
 Return JSON:
 {
@@ -607,16 +830,22 @@ Return JSON:
   "duration": "estimated mm:ss",
   "style": "${styleKey}",
   "styleLabel": "human readable style",
-  "hosts": ["Alex", "Sam"],
+  "hosts": ["..."],
   "description": "one paragraph",
   "segments": [{ "time": "0:00", "title": "segment", "summary": "summary" }],
-  "script": [{ "speaker": "Alex", "text": "line" }, { "speaker": "Sam", "text": "line" }]
+  "script": [{ "speaker": "...", "text": "line" }]
 }
-Include 4-6 segments and 12-16 script lines. Cover the key points from the notes. Alex and Sam should explain concepts clearly to the student — natural pacing, not rushed.`,
+Include 4-6 segments and 12-16 script lines. Cover the key points from the notes.`,
       []
     );
-    if (!Array.isArray(data.hosts) || data.hosts.length < 2) {
-      data.hosts = ['Alex', 'Sam'];
+    if (!Array.isArray(data.hosts) || !data.hosts.length) {
+      const defaults = {
+        conversational: ['Alex', 'Sam'],
+        lecture: ['Dr. Lee'],
+        interview: ['Host', 'Guest expert'],
+        practice: ['Alex', 'Sam']
+      };
+      data.hosts = defaults[styleKey] || defaults.conversational;
     }
     return data;
   });
@@ -910,10 +1139,14 @@ module.exports = {
   generateFlashcardsFromText,
   generateNotes,
   generateNotesFromAudio,
+  generateNotesFromYoutube,
   generateQuiz,
   generatePodcast,
   generatePodcastAudio,
   solveProblem,
   generateChat,
+  generateInterviewTurn,
+  generateInterviewReview,
+  extractInterviewQAPairs,
   generateSolveText
 };
